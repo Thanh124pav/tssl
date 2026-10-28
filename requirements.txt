@@ -1,0 +1,32 @@
+# Core ML
+torch==2.4.1
+torchvision==0.19.1
+transformers<5
+accelerate
+timm
+einops
+
+# Scientific
+numpy
+scipy
+pandas
+scikit-learn
+h5py
+
+# Video / IO
+opencv-python-headless
+av
+decord
+imageio
+imageio-ffmpeg
+
+# Utils
+tqdm
+wandb
+hydra-core
+omegaconf
+matplotlib
+
+# HuggingFace
+datasets
+huggingface_hub
