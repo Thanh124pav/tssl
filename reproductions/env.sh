@@ -2,7 +2,7 @@
 # Caps CPU threads below the Slurm allocation (RULE.md section 2) and keeps
 # every cache and output on /mnt/data rather than $HOME (RULE.md section 3).
 
-export ACVCL_ROOT=/mnt/data/thanhpv/acvcl
+export ACVCL_ROOT=/mnt/data/thanhpv/tssl
 export CONDA_ROOT=/mnt/data/thanhpv/miniconda3
 export ACVCL_ENV="$CONDA_ROOT/envs/acvcl"
 export PATH="$ACVCL_ENV/bin:$PATH"

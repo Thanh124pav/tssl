@@ -6,11 +6,11 @@
 #   4. commit + push to tssl
 set -u
 cd "$(dirname "$0")/src"
-source /mnt/data/thanhpv/acvcl/reproductions/env.sh
+source /mnt/data/thanhpv/tssl/reproductions/env.sh
 
-LOGS=/mnt/data/thanhpv/acvcl/reproductions/tssl/logs/overnight
-WANDB_ROOT=/mnt/data/thanhpv/acvcl/outputs/wandb/vasot-repro
-DIAG_OUT=/mnt/data/thanhpv/acvcl/reproductions/tssl/outputs/overnight_diag
+LOGS=/mnt/data/thanhpv/tssl/reproductions/tssl/logs/overnight
+WANDB_ROOT=/mnt/data/thanhpv/tssl/outputs/wandb/vasot-repro
+DIAG_OUT=/mnt/data/thanhpv/tssl/reproductions/tssl/outputs/overnight_diag
 mkdir -p "$DIAG_OUT"
 
 # 1. wait for dispatcher
@@ -52,10 +52,10 @@ echo "[finalize] diagnostics done"
 # 3. aggregate
 python aggregate_results.py "$tsv" > "$LOGS/_summary.md"
 python compile_final_report.py "$tsv" "$DIAG_OUT" \
-    > /mnt/data/thanhpv/acvcl/reports/SESSION_REPORT_OVERNIGHT_2026-10-28.md
+    > /mnt/data/thanhpv/tssl/reports/SESSION_REPORT_OVERNIGHT_2026-10-28.md
 
 # 4. commit + push
-cd /mnt/data/thanhpv/acvcl
+cd /mnt/data/thanhpv/tssl
 git add reports/SESSION_REPORT_OVERNIGHT_2026-10-28.md reports/OVERNIGHT_PLAN_2026-10-27.md
 git commit -m "$(cat <<'EOF'
 docs: overnight sweep results — 8 smoothing variants × 5 datasets × 2 seeds

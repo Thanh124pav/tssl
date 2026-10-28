@@ -6,7 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/src"
 
-LOG_DIR="/mnt/data/thanhpv/acvcl/reproductions/tssl/logs/paper_hparams"
+LOG_DIR="/mnt/data/thanhpv/tssl/reproductions/tssl/logs/paper_hparams"
 mkdir -p "$LOG_DIR"
 
 actions=("pancake" "salat" "friedegg" "scrambledegg" "sandwich" "juice" "milk" "tea" "cereals" "coffee")

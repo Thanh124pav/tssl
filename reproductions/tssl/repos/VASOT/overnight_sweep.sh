@@ -14,9 +14,9 @@
 set -u                                  # fail on undefined vars (but not on command errors — one failed run must not abort the sweep)
 
 cd "$(dirname "$0")/src"
-source /mnt/data/thanhpv/acvcl/reproductions/env.sh
+source /mnt/data/thanhpv/tssl/reproductions/env.sh
 
-OUT=/mnt/data/thanhpv/acvcl/reproductions/tssl/logs/overnight
+OUT=/mnt/data/thanhpv/tssl/reproductions/tssl/logs/overnight
 mkdir -p "$OUT"
 STATUS="$OUT/_status.tsv"
 if [ ! -s "$STATUS" ]; then
