@@ -83,4 +83,3 @@ python scripts/smoke_test_pairs.py
 Produces a table comparing `random`, `similarity`, `hard_pair` selectors on
 loss convergence. See `SETUP_STATUS.md` and `REPRODUCTION_STATUS.md` for
 latest run numbers and environment status.
-# Temporal Self-Supervised Learning
