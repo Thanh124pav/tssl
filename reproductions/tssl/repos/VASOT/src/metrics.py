@@ -20,7 +20,7 @@ class ClusteringMetrics(Metric):
     def update(self, pred_labels, gt_labels, mask):
         self.pred_labels.extend(pred_labels.flatten()[mask.flatten()].tolist())
         self.gt_labels.extend(gt_labels.flatten()[mask.flatten()].tolist())
-        self.n_videos += pred_labels.shape[0]
+        self.n_videos = self.n_videos + pred_labels.shape[0]
 
     def compute(self, exclude_cls=None, pred_to_gt=None):
         metric, pred_to_gt = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos, exclude_cls, pred_to_gt)

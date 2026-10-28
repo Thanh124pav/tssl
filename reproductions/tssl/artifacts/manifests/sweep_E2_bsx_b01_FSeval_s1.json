@@ -1,0 +1,26 @@
+{
+  "run_id": "sweep_E2_bsx_b01_FSeval_s1",
+  "track": "VASOT_sweep",
+  "dataset": "FSeval",
+  "variant": "E2_bsx_b01",
+  "seed": 1,
+  "phase": "sweep",
+  "exit_code": -15,
+  "status": "interrupted",
+  "interruption": "SIGTERM at ~epoch 16/30 (Slurm job timeout)",
+  "metrics": null,
+  "log_path": "/mnt/data/thanhpv/acvcl/reproductions/tssl/logs/session_full/sweep_E2_bsx_b01_FSeval_s1.log",
+  "log_exists": true,
+  "checkpoint_mapping": "ambiguous_shared_version_62534",
+  "checkpoint_identity": "unknown",
+  "note": "B-spline E2 run interrupted by SIGTERM around epoch 16. Checkpoints in version_62534 cannot be mapped to specific runs. No test metrics available.",
+  "slurm_job_id": 62534,
+  "environment": {
+    "python": "3.10.22",
+    "pytorch": "2.4.1+cu121",
+    "pytorch_lightning": "2.6.6",
+    "conda_env": "acvcl"
+  },
+  "created_by": "S00_inventory",
+  "created_at": "2026-10-28T18:07:33.924348Z"
+}

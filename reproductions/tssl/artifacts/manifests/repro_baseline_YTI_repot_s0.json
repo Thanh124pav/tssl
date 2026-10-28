@@ -1,0 +1,33 @@
+{
+  "run_id": "repro_baseline_YTI_repot_s0",
+  "track": "VASOT",
+  "dataset": "YTI_repot",
+  "variant": "baseline",
+  "seed": 0,
+  "phase": "repro",
+  "start_time": "2026-10-28T12:19:23Z",
+  "end_time": "2026-10-28T12:24:35Z",
+  "exit_code": 0,
+  "metrics": {
+    "mof": 0.3655473291873932,
+    "f1": 0.22608041763305664,
+    "miou": 0.1535143107175827
+  },
+  "data_path": "/mnt/data/thanhpv/acvcl/reproductions/tssl/data/final/YTI",
+  "log_path": "/mnt/data/thanhpv/acvcl/reproductions/tssl/logs/session_full/repro_baseline_YTI_repot_s0.log",
+  "log_exists": true,
+  "hparams_source": "version_62534",
+  "checkpoint_mapping": "ambiguous_shared_version_62534",
+  "checkpoint_identity": "unknown",
+  "note": "Retrospective manifest created by S00 inventory. Checkpoint cannot be reliably mapped to this specific run due to shared lightning_logs/version_62534 across multiple concurrent runs.",
+  "slurm_job_id": 62534,
+  "hostname": "worker-0",
+  "environment": {
+    "python": "3.10.22",
+    "pytorch": "2.4.1+cu121",
+    "pytorch_lightning": "2.6.6",
+    "conda_env": "acvcl"
+  },
+  "created_by": "S00_inventory",
+  "created_at": "2026-10-28T18:07:18.852291Z"
+}

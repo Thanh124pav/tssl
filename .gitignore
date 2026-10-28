@@ -10,3 +10,5 @@ __pycache__/
 models/
 reproductions/**/results/
 checkpoints/
+reproductions/**/artifacts/runs/
+reproductions/**/lightning_logs/

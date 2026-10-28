@@ -1,0 +1,28 @@
+dataset: desktop_assembly
+activity: [all]
+n_clusters: 22
+n_epochs: 30
+seed: 0
+rho: 0.25
+lambda_actions_train: 0.16
+radius_gw: 0.02
+layer_sizes: [512, 128, 40]
+learning_rate: 0.001
+weight_decay: 0.0001
+ub_actions: true
+ub_frames: false
+std_feats: false
+n_frames: 256
+val_freq: 5
+alpha_train: 0.3
+alpha_eval: 0.6
+beta: 1
+train_eps: 0.07
+eval_eps: 0.04
+lambda_frames_train: 0.05
+lambda_frames_eval: 0.05
+lambda_actions_eval: 0.01
+n_ot_train: [25, 1]
+n_ot_eval: [25, 1]
+exclude: null
+source: README inline command

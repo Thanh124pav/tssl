@@ -1,0 +1,37 @@
+dataset: Breakfast
+activities:
+  pancake: {n_clusters: 14}
+  salat: {n_clusters: 8}
+  friedegg: {n_clusters: 9}
+  scrambledegg: {n_clusters: 12}
+  sandwich: {n_clusters: 9}
+  juice: {n_clusters: 8}
+  milk: {n_clusters: 5}
+  tea: {n_clusters: 7}
+  cereals: {n_clusters: 5}
+  coffee: {n_clusters: 7}
+n_epochs: 50
+seed: 0
+rho: 0.2
+lambda_actions_train: 0.1
+radius_gw: 0.04
+layer_sizes: [64, 128, 40]
+learning_rate: 0.001
+weight_decay: 0.0001
+ub_actions: false
+ub_frames: false
+std_feats: true
+n_frames: 256
+val_freq: 5
+exclude: null
+alpha_train: 0.5
+alpha_eval: 0.6
+beta: 1
+train_eps: 0.07
+eval_eps: 0.04
+lambda_frames_train: 0.05
+lambda_frames_eval: 0.05
+lambda_actions_eval: 0.01
+n_ot_train: [25, 1]
+n_ot_eval: [25, 1]
+source: run_bf.sh

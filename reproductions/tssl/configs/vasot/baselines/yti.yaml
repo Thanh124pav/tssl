@@ -1,0 +1,32 @@
+dataset: YTI
+activities:
+  changing_tire: {n_clusters: 11}
+  coffee: {n_clusters: 10}
+  cpr: {n_clusters: 7}
+  jump_car: {n_clusters: 12}
+  repot: {n_clusters: 8}
+n_epochs: 30
+seed: 0
+rho: 0.15
+lambda_actions_train: 0.12
+radius_gw: 0.04
+layer_sizes: [3000, 32, 32]
+learning_rate: 0.0001
+weight_decay: 0.00001
+ub_actions: false
+ub_frames: false
+std_feats: false
+n_frames: 256
+val_freq: 5
+exclude: -1
+alpha_train: 0.3
+alpha_eval: 0.6
+beta: 1
+train_eps: 0.07
+eval_eps: 0.04
+lambda_frames_train: 0.05
+lambda_frames_eval: 0.05
+lambda_actions_eval: 0.01
+n_ot_train: [25, 1]
+n_ot_eval: [25, 1]
+source: run_yti.sh

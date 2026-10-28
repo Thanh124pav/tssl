@@ -582,15 +582,29 @@ if __name__ == '__main__':
     parser.add_argument('--gauss-sigma', type=float, default=2.0, help='Gaussian kernel std (frames)')
     parser.add_argument('--gauss-blend-max', type=float, default=1.0, help='Gaussian residual blend coefficient')
     parser.add_argument('--gauss-warmup-epochs', type=int, default=5, help='epochs of identity before gauss kicks in')
+    parser.add_argument('--run-dir', type=str, default=None,
+                        help='explicit output directory for this run (logs, checkpoints, manifest)')
+    parser.add_argument('--run-id', type=str, default=None,
+                        help='unique run identifier (default: auto-generated from config)')
     args = parser.parse_args()
 
     pl.seed_everything(args.seed)
-    
-    #TODO: Modify VideoDataset, DataLoader and create a new file structure to read 2 videos and their labels
-    # Set the paths for the data directory, its structure is mentioned in the README 
+
+    import json, socket, subprocess, hashlib
+    from datetime import datetime, timezone
+
+    act_str = '-'.join(args.activity) if isinstance(args.activity, list) else str(args.activity)
+    run_id = args.run_id or f"{args.dataset}_{act_str}_s{args.seed}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+
+    run_dir = args.run_dir or os.path.join(
+        os.environ.get('VASOT_ARTIFACTS_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'artifacts')),
+        'runs', run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    ckpt_subdir = os.path.join(run_dir, 'checkpoints')
+    os.makedirs(ckpt_subdir, exist_ok=True)
+
     data_val = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
     data_train = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
-    # Only difference is passing n_frames=None
     data_test = VideoDataset('../data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
     val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
@@ -598,55 +612,89 @@ if __name__ == '__main__':
 
     if args.ckpt is not None:
         ssl = VideoSSL.load_from_checkpoint(args.ckpt)
-    
-    #TODO: Initialize using only the arguments we will need
     else:
         ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha_train=args.alpha_train, alpha_eval=args.alpha_eval,
                        ub_frames=args.ub_frames, ub_actions=args.ub_actions, lambda_frames_train=args.lambda_frames_train, lambda_frames_eval=args.lambda_frames_eval,
                        lambda_actions_train=args.lambda_actions_train, lambda_actions_eval=args.lambda_actions_eval, step_size=args.step_size,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
-                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho,  beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
+                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
                        arc_reparam=args.arc_reparam, arc_warmup_epochs=args.arc_warmup_epochs,
                        bspline=args.bspline, bspline_tol=args.bspline_tol, bspline_kmax=args.bspline_kmax, bspline_warmup_epochs=args.bspline_warmup_epochs,
                        bspline_space=args.bspline_space, bspline_blend_max=args.bspline_blend_max, bspline_blend_rampup=args.bspline_blend_rampup,
                        gauss_smooth=args.gauss_smooth, gauss_sigma=args.gauss_sigma,
                        gauss_blend_max=args.gauss_blend_max, gauss_warmup_epochs=args.gauss_warmup_epochs)
-    
+
     logger = None
     if args.wandb:
         from pytorch_lightning.loggers import WandbLogger
-        act_str = '-'.join(args.activity) if isinstance(args.activity, list) else str(args.activity)
         run_name = args.wandb_run_name or f"{args.dataset}_{act_str}_ne{args.n_epochs}_seed{args.seed}"
-        logger = WandbLogger(project=args.wandb_project, name=run_name, tags=args.wandb_tags, save_dir=os.environ.get('WANDB_DIR', './wandb'), config=vars(args))
+        logger = WandbLogger(project=args.wandb_project, name=run_name, tags=args.wandb_tags,
+                             save_dir=os.environ.get('WANDB_DIR', './wandb'), config=vars(args))
 
-    # TODO: Added num_sanity_val_steps=0 to disable the initial validation step while I fix the training_step, remove it later
-    trainer = pl.Trainer(devices=1, accelerator='gpu', check_val_every_n_epoch=args.val_freq, max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger, num_sanity_val_steps=0)
+    accel = 'gpu' if torch.cuda.is_available() else 'cpu'
+    devices = 1 if accel == 'gpu' else 'auto'
 
-    # Named checkpoint directory — allows concurrent runs to save independently.
-    ckpt_dir = os.environ.get('VASOT_CKPT_DIR', None)
-    ckpt_callbacks = []
-    if ckpt_dir:
-        from pytorch_lightning.callbacks import ModelCheckpoint
-        act_str = '-'.join(args.activity) if isinstance(args.activity, list) else str(args.activity)
-        ckpt_name = f"{args.dataset}_{act_str}_s{args.seed}"
-        ckpt_callbacks.append(ModelCheckpoint(
-            dirpath=ckpt_dir,
-            filename=ckpt_name + '-{epoch}',
-            save_last=True,
-            every_n_epochs=max(1, args.n_epochs),  # save at end
-        ))
-        # Make last.ckpt have the run-specific name
-        trainer = pl.Trainer(devices=1, accelerator='gpu', check_val_every_n_epoch=args.val_freq,
-                             max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger,
-                             num_sanity_val_steps=0, callbacks=ckpt_callbacks,
-                             default_root_dir=ckpt_dir)
-    else:
-        trainer = pl.Trainer(devices=1, accelerator='gpu', check_val_every_n_epoch=args.val_freq,
-                             max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger,
-                             num_sanity_val_steps=0)
+    from pytorch_lightning.callbacks import ModelCheckpoint
+    ckpt_callback = ModelCheckpoint(
+        dirpath=ckpt_subdir,
+        filename=f"{run_id}" + '-{epoch}',
+        save_last=True,
+        every_n_epochs=max(1, args.n_epochs),
+    )
 
-    if not args.eval:
-        # TODO: Uncomment this once the evaluation metrics are fixed
-        trainer.validate(ssl, val_loader)
-        trainer.fit(ssl, train_loader, val_loader)
-    trainer.test(ssl, dataloaders=test_loader)
+    trainer = pl.Trainer(
+        devices=devices, accelerator=accel,
+        check_val_every_n_epoch=args.val_freq, max_epochs=args.n_epochs,
+        log_every_n_steps=50, logger=logger, num_sanity_val_steps=0,
+        callbacks=[ckpt_callback],
+        default_root_dir=run_dir,
+    )
+
+    git_hash = 'unknown'
+    try:
+        git_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=os.path.dirname(__file__), stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        pass
+
+    manifest = {
+        'run_id': run_id,
+        'dataset': args.dataset,
+        'activity': args.activity,
+        'seed': args.seed,
+        'config': vars(args),
+        'run_dir': os.path.abspath(run_dir),
+        'git_commit': git_hash,
+        'hostname': socket.gethostname(),
+        'slurm_job_id': os.environ.get('SLURM_JOB_ID', None),
+        'accelerator': accel,
+        'start_time': datetime.now(timezone.utc).isoformat(),
+        'status': 'started',
+    }
+    manifest_path = os.path.join(run_dir, 'manifest.json')
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+
+    try:
+        if not args.eval:
+            trainer.validate(ssl, val_loader)
+            trainer.fit(ssl, train_loader, val_loader)
+        test_results = trainer.test(ssl, dataloaders=test_loader)
+
+        manifest['end_time'] = datetime.now(timezone.utc).isoformat()
+        manifest['status'] = 'completed'
+        if test_results:
+            manifest['test_metrics'] = test_results[0]
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+
+        metrics_path = os.path.join(run_dir, 'metrics.json')
+        with open(metrics_path, 'w') as f:
+            json.dump(test_results[0] if test_results else {}, f, indent=2)
+
+    except Exception as exc:
+        manifest['end_time'] = datetime.now(timezone.utc).isoformat()
+        manifest['status'] = 'failed'
+        manifest['error'] = str(exc)
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+        raise
