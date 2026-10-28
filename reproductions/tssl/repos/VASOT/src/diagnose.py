@@ -92,7 +92,7 @@ def pair_corr_index_vs_semantic(gt, mask, max_pairs=20000, rng=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--dataset", required=True, choices=["FS", "FSeval", "Breakfast", "YTI"])
+    ap.add_argument("--dataset", required=True, choices=["FS", "FSeval", "Breakfast", "YTI", "desktop_assembly"])
     ap.add_argument("--activity", nargs="+", default=["all"])
     ap.add_argument("--data-root", default="../data")
     ap.add_argument("--out", default=None)

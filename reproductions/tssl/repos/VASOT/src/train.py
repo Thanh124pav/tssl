@@ -622,6 +622,29 @@ if __name__ == '__main__':
     # TODO: Added num_sanity_val_steps=0 to disable the initial validation step while I fix the training_step, remove it later
     trainer = pl.Trainer(devices=1, accelerator='gpu', check_val_every_n_epoch=args.val_freq, max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger, num_sanity_val_steps=0)
 
+    # Named checkpoint directory — allows concurrent runs to save independently.
+    ckpt_dir = os.environ.get('VASOT_CKPT_DIR', None)
+    ckpt_callbacks = []
+    if ckpt_dir:
+        from pytorch_lightning.callbacks import ModelCheckpoint
+        act_str = '-'.join(args.activity) if isinstance(args.activity, list) else str(args.activity)
+        ckpt_name = f"{args.dataset}_{act_str}_s{args.seed}"
+        ckpt_callbacks.append(ModelCheckpoint(
+            dirpath=ckpt_dir,
+            filename=ckpt_name + '-{epoch}',
+            save_last=True,
+            every_n_epochs=max(1, args.n_epochs),  # save at end
+        ))
+        # Make last.ckpt have the run-specific name
+        trainer = pl.Trainer(devices=1, accelerator='gpu', check_val_every_n_epoch=args.val_freq,
+                             max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger,
+                             num_sanity_val_steps=0, callbacks=ckpt_callbacks,
+                             default_root_dir=ckpt_dir)
+    else:
+        trainer = pl.Trainer(devices=1, accelerator='gpu', check_val_every_n_epoch=args.val_freq,
+                             max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger,
+                             num_sanity_val_steps=0)
+
     if not args.eval:
         # TODO: Uncomment this once the evaluation metrics are fixed
         trainer.validate(ssl, val_loader)
