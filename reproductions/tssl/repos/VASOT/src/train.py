@@ -10,6 +10,7 @@ import pytorch_lightning as pl
 import os
 
 from arc_reparam import arc_u, resample_uniform_u, inverse_warp_predictions
+from bezier import smooth_X_bezier
 from bspline import smooth_X as bspline_smooth_X
 from gauss_smooth import gaussian_smooth
 
@@ -33,7 +34,9 @@ class VideoSSL(pl.LightningModule):
                  arc_reparam=False, arc_warmup_epochs=5,
                  bspline=False, bspline_tol=0.05, bspline_kmax=0, bspline_warmup_epochs=5,
                  bspline_space='X', bspline_blend_max=1.0, bspline_blend_rampup=0,
-                 gauss_smooth=False, gauss_sigma=2.0, gauss_blend_max=1.0, gauss_warmup_epochs=5):
+                 gauss_smooth=False, gauss_sigma=2.0, gauss_blend_max=1.0, gauss_warmup_epochs=5,
+                 bezier=False, bezier_nseg=4, bezier_tol=0.05, bezier_maxseg=32,
+                 bezier_warmup_epochs=5, bezier_space='X', bezier_blend_max=1.0, bezier_blend_rampup=0):
         super().__init__()
         self.lr = lr
         self.weight_decay = weight_decay
@@ -75,6 +78,14 @@ class VideoSSL(pl.LightningModule):
         self.gauss_sigma = gauss_sigma
         self.gauss_blend_max = gauss_blend_max
         self.gauss_warmup_epochs = gauss_warmup_epochs
+        self.bezier = bezier
+        self.bezier_nseg = bezier_nseg
+        self.bezier_tol = bezier_tol
+        self.bezier_maxseg = bezier_maxseg
+        self.bezier_warmup_epochs = bezier_warmup_epochs
+        self.bezier_space = bezier_space
+        self.bezier_blend_max = bezier_blend_max
+        self.bezier_blend_rampup = bezier_blend_rampup
         # initialize MLP
         layers = [nn.Sequential(nn.Linear(sz, sz1), nn.ReLU()) for sz, sz1 in zip(layer_sizes[:-2], layer_sizes[1:-1])]
         layers += [nn.Linear(layer_sizes[-2], layer_sizes[-1])]
@@ -124,6 +135,17 @@ class VideoSSL(pl.LightningModule):
         if self.training and self.gauss_smooth and self.current_epoch >= self.gauss_warmup_epochs:
             smoothed = gaussian_smooth(features, sigma=self.gauss_sigma)
             blend = self._ramp(self.gauss_blend_max, self.gauss_warmup_epochs, 0)
+            features = F.normalize((1 - blend) * features + blend * smoothed, dim=-1)
+        if self.training and self.bezier and self.current_epoch >= self.bezier_warmup_epochs:
+            if self.bezier_space == 'X':
+                smoothed = smooth_X_bezier(features, mask, n_segments=self.bezier_nseg,
+                                           tol=self.bezier_tol, max_segments=self.bezier_maxseg)
+            else:
+                L = features @ self.clusters.T.unsqueeze(0)
+                L_smoothed = smooth_X_bezier(L, mask, n_segments=self.bezier_nseg,
+                                             tol=self.bezier_tol, max_segments=self.bezier_maxseg)
+                smoothed = L_smoothed @ self.clusters.unsqueeze(0)
+            blend = self._ramp(self.bezier_blend_max, self.bezier_warmup_epochs, self.bezier_blend_rampup)
             features = F.normalize((1 - blend) * features + blend * smoothed, dim=-1)
         return features, u
 
@@ -582,6 +604,15 @@ if __name__ == '__main__':
     parser.add_argument('--gauss-sigma', type=float, default=2.0, help='Gaussian kernel std (frames)')
     parser.add_argument('--gauss-blend-max', type=float, default=1.0, help='Gaussian residual blend coefficient')
     parser.add_argument('--gauss-warmup-epochs', type=int, default=5, help='epochs of identity before gauss kicks in')
+    parser.add_argument('--bezier', action='store_true', help='E4: piecewise cubic Bézier fit of X before OT')
+    parser.add_argument('--bezier-nseg', type=int, default=4, help='initial number of Bézier segments')
+    parser.add_argument('--bezier-tol', type=float, default=0.05, help='reconstruction tolerance for adaptive segment splitting')
+    parser.add_argument('--bezier-maxseg', type=int, default=32, help='max number of Bézier segments')
+    parser.add_argument('--bezier-warmup-epochs', type=int, default=5, help='epochs of identity before bezier kicks in')
+    parser.add_argument('--bezier-space', type=str, default='X', choices=['X', 'logits'],
+                        help='fit Bézier on frame embedding X (default) or on action logits X·A^T')
+    parser.add_argument('--bezier-blend-max', type=float, default=1.0, help='residual blend coefficient at max (0=off, 1=full)')
+    parser.add_argument('--bezier-blend-rampup', type=int, default=0, help='epochs over which blend ramps from 0 to blend-max')
     parser.add_argument('--run-dir', type=str, default=None,
                         help='explicit output directory for this run (logs, checkpoints, manifest)')
     parser.add_argument('--run-id', type=str, default=None,
@@ -622,7 +653,11 @@ if __name__ == '__main__':
                        bspline=args.bspline, bspline_tol=args.bspline_tol, bspline_kmax=args.bspline_kmax, bspline_warmup_epochs=args.bspline_warmup_epochs,
                        bspline_space=args.bspline_space, bspline_blend_max=args.bspline_blend_max, bspline_blend_rampup=args.bspline_blend_rampup,
                        gauss_smooth=args.gauss_smooth, gauss_sigma=args.gauss_sigma,
-                       gauss_blend_max=args.gauss_blend_max, gauss_warmup_epochs=args.gauss_warmup_epochs)
+                       gauss_blend_max=args.gauss_blend_max, gauss_warmup_epochs=args.gauss_warmup_epochs,
+                       bezier=args.bezier, bezier_nseg=args.bezier_nseg, bezier_tol=args.bezier_tol,
+                       bezier_maxseg=args.bezier_maxseg, bezier_warmup_epochs=args.bezier_warmup_epochs,
+                       bezier_space=args.bezier_space, bezier_blend_max=args.bezier_blend_max,
+                       bezier_blend_rampup=args.bezier_blend_rampup)
 
     logger = None
     if args.wandb:

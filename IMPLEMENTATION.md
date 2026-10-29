@@ -223,7 +223,7 @@ reproductions/tssl/
 
 **Exit criterion:** một DA canonical run có provenance đầy đủ và bảng so sánh paper.
 
-#### [ ] R01 — Audit và aggregate YTI baseline
+#### [x] R01 — Audit và aggregate YTI baseline
 
 **Mục tiêu:** đóng kết quả YTI trên cả 5 activities.
 
@@ -403,7 +403,7 @@ GT chỉ dùng cho diagnosis/evaluation, không được vô tình đi vào trai
 
 **Exit criterion:** biết B-spline có hơn Gaussian control hay chỉ là smoothing effect.
 
-#### [ ] E04 — Piecewise cubic Bézier implementation
+#### [x] E04 — Piecewise cubic Bézier implementation
 
 **Mục tiêu:** thêm Bézier control có tính local và testable.
 
@@ -512,7 +512,7 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | S02 | DONE | train.py refactored | Single Trainer, run isolation, manifest, auto CPU/GPU, metrics.py fix |
 | S03 | DONE | CPU+GPU smoke pass | DA+YTI GPU smoke 1ep OK, FSeval CPU smoke OK, manifest+ckpt isolated |
 | R00 | DONE | R00_DA_baseline_s0, wandb ge8a3wu7 | MoF=0.5986 F1=0.6380 mIoU=0.4211, canonical with provenance |
-| R01 | TODO | 5 YTI seed 0 provisional | Chưa formal aggregate |
+| R01 | DONE | R01_YTI_*_s0, wandb tihe3mu9/6jaj64ev/5cg9rker/+ | Mean: MoF=0.4793 F1=0.3493 mIoU=0.2259. All 5 match old runs exactly |
 | R02 | CONDITIONAL | | Chỉ chạy khi gate kích hoạt |
 | D00 | TODO | | |
 | D01 | PARTIAL | | Entropy evidence sơ bộ |
@@ -528,7 +528,7 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | E01 | PARTIAL | | 4 E2 run bị ngắt, identity ambiguous |
 | E02 | TODO | | |
 | E03 | TODO | | Code Gaussian đã có, experiment chưa đóng |
-| E04 | TODO | | Bézier chưa implement |
+| E04 | DONE | bezier.py + 5 tests + train.py integration | Piecewise cubic Bézier with C1, adaptive segments, 8/8 tests pass |
 | E05 | TODO | | |
 | E06 | TODO | | |
 | E07 | TODO | | |
