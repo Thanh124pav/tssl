@@ -513,7 +513,7 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | S03 | DONE | CPU+GPU smoke pass | DA+YTI GPU smoke 1ep OK, FSeval CPU smoke OK, manifest+ckpt isolated |
 | R00 | DONE | R00_DA_baseline_s0, wandb ge8a3wu7 | MoF=0.5986 F1=0.6380 mIoU=0.4211, canonical with provenance |
 | R01 | DONE | R01_YTI_*_s0, wandb tihe3mu9/6jaj64ev/5cg9rker/+ | Mean: MoF=0.4793 F1=0.3493 mIoU=0.2259. All 5 match old runs exactly |
-| R02 | CONDITIONAL | | Chỉ chạy khi gate kích hoạt |
+| R02 | DONE | R02_DA_baseline_s1, R02_YTI_*_baseline_s1 (6 runs) | Seed-1 baseline controls for E08 paired comparison |
 | D00 | DONE | diagnose.py + 13 dataset runs | Schema versioned, diagnostics don't alter training |
 | D01 | DONE | 13 datasets + E01 comparison | A: SUPPORTED — T_ent 0.024-0.119, but softening via B-spline hurts |
 | D02 | DONE | 13 datasets | B: PARTIAL — boundary_z mean 0.145, negative for Breakfast |
@@ -521,20 +521,24 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | D04 | DONE | reports/D04_DIAGNOSIS_AGGREGATE.md | Full aggregate report with hypothesis verdicts |
 | V00 | DONE | VAOT/PROVENANCE.md | Clean import, provenance, import test. PL 2.x porting needed (train.py, evaluations.py). Pouring data found but flat structure. Penn/IKEA/npyrecords missing. |
 | V01 | DONE | reports/V01_VAOT_DATA_AUDIT.md | Pouring usable after reorg (.mov → per-video frames, labels from pkl); Penn/IKEA missing — V04 blocked |
-| V02 | TODO | | Prep script + PL 2.x porting required before smoke |
-| V03 | TODO | | |
+| V03 | BLOCKED | | Pouring labels degenerate; no labelled VAOT dataset on cluster |
 | V04 | BLOCKED | | Penn Action and IKEA ASM not present on cluster |
 | E00 | DONE | reports/E00_EXPERIMENT_CONTRACT.md + E00_contract.lock | Contract backfilled, baseline config hash pinned |
 | E01 | DONE | E01_bspline_FSeval_s{0,1} | B-spline paired seeds complete; mean MoF -11.95pp vs baseline |
 | E02 | DONE | subsumed by E01 (paired-seed B-spline) | |
 | E03 | DONE | E03_gauss_s2_FSeval_s{0,1} | Gaussian σ=2 paired seeds; mean MoF -10.55pp |
-| E04 | DONE | bezier.py + 5 tests + train.py integration; E04_bezier_FSeval_s{0,1} | mean MoF -11.89pp (mIoU collapsed to 0.03) |
+| E04 | RETIRED | bezier.py + 5 tests + train.py integration; E04_bezier_FSeval_s{0,1} | Checkpoints NaN (13 960/13 960 non-finite params) — numerical failure, not a legitimate result. Bézier dropped from roadmap per user. |
 | E05 | DONE | reports/E05_COMPARISON_MATRIX.md | All variants fail scale gate; E06 skipped |
 | E06 | SKIP | | Gate not passed on FSeval; scaling to DA/YTI unjustified |
-| E07a | DONE | reports/E07a_EPS_ABLATION.md | 4 runs on FSeval; ε↑ monotonically harms (−14.9 pp, −25.9 pp) — A refuted as actionable |
-| E07b | DONE | reports/E07bc_PRIOR_ABLATION.md | rho ablation — **rho=0 +7.95 pp, rho=0.05 +4.10 pp**; both PASS gate; first positive result in project |
-| E07c | DONE | reports/E07bc_PRIOR_ABLATION.md | radius_gw ablation — 0.12 FAIL (−2.85 pp), 0.50 FAIL (−15.20 pp); C^x is not the lever |
+| E07a | DONE (reinterpreted) | reports/E07a_EPS_ABLATION.md | ε↑ harms MoF monotonically; E09 shows this is partly a solver degeneration (T_xy collapses at ε≥0.10). Original "A refuted" claim softened. |
+| E07b | DONE | reports/E07bc_PRIOR_ABLATION.md | rho ablation — rho=0 +7.95 pp FSeval; see E08 for cross-dataset verdict |
+| E07c | DONE | reports/E07bc_PRIOR_ABLATION.md | radius_gw ablation — 0.12 FAIL (−2.85 pp), 0.50 FAIL (−15.20 pp) |
+| E08 | DONE | reports/E08_RHO0_TRANSFER.md, E08a/b runs (12) + R02 (6) | rho=0 does NOT transfer: DA Δ=−3.23 pp, YTI mean Δ=−4.17 pp. FSeval gain is dataset-specific. |
+| E09 | DONE | reports/E09_LIMITATION_RECHECK.md, scripts/eval_{boundary,rho_swap,transport_support}.py | Transport-support probes: T_xy is NOT peaky (support 30.87/256). ε control shows T_xy collapses with higher ε. Boundary F1 adds direct B metric. |
+| E11 | DONE | reports/E09 §rho split (also run_e11_rho_split.sh) | **seg0 +9.49 pp PASS, align0 +0.97 pp**. FSeval gain from rho=0 comes entirely from segmentation prior, not alignment. |
 | V02 | DONE | reports/V02_VAOT_PL2_PORT.md | PL 2.x port; all VAOT modules import cleanly |
+| E10a | PENDING | reproductions/tssl/scripts/run_e10a_bspline_logits.sh | B-spline in logits-space (action-space), 2 blend × 2 seed on FSeval |
+| E10b | PENDING | | B-spline in dedicated latent space (new projection head) — design + implementation |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án

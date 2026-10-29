@@ -11,4 +11,5 @@ models/
 reproductions/**/results/
 checkpoints/
 reproductions/**/artifacts/runs/
+reproductions/**/artifacts/diagnostics/
 reproductions/**/lightning_logs/

@@ -38,31 +38,23 @@ settings — the model loses the clustering structure almost completely.
 
 ## Interpretation
 
-Softening T* at the solver level moves the task metrics in the **same direction**
-as softening it at the representation level (E01 B-spline, E03 Gaussian,
-E04 Bézier) — i.e. uniformly worse — and does so **monotonically** in ε.
-mIoU collapses almost completely (from 0.27 to 0.03), meaning the model loses
-its clustering structure before it loses frame accuracy.
+Increasing ε during training monotonically worsened FSeval MoF and mIoU in
+this grid. A later solver-only control on a **fixed baseline checkpoint**
+(E09) shows why this cannot be read as "softer alignment hurts": `T_xa`
+softens at ε=0.10/0.15, while `T_xy` becomes *sharper* and is one-hot by
+ε=0.15. At ε=0.30 both plans are one-hot. The retrained ε=0.15 model also
+routes 62.8% of source rows to the virtual alignment target.
 
-Two independent levers (OT solver entropy, representation smoothing) therefore
-converge on the same conclusion: making T\* less peaky harms VASOT, not helps it.
+**Revised verdict on Hypothesis A: INCONCLUSIVE as a performance cause.**
+The ε ablation is a negative result for these solver settings, but it is not
+a clean intervention that softens alignment. E09 directly measures baseline
+alignment `T_xy` and finds mean top-1 mass 0.126 over 50 sampled pairs;
+the earlier near-top-1 measurement was for segmentation `T_xa`.
 
-**Verdict on Hypothesis A as actionable root cause: REFUTED.**
-T\*'s peakiness is correctly diagnosed as a property of the trained model
-(D01, D04), but it is functional — the model needs the near-top-1 assignment
-to produce coherent segments. Reducing peakiness, by any lever we have tried,
-destroys mIoU before it buys anything.
-
-This re-weights the diagnosis:
-
-- **A (peaky T*)**: observed, but *not* a lever. Marks the model's working mode,
-  not its failure mode.
-- **B (tautological CE + boundary blindness)**: partially supported; needs a
-  boundary-aware loss as its own direct intervention, not a smoothing surrogate.
-- **C (frame-index prior)**: now the most plausible remaining root cause.
-  No lever in this session has yet directly ablated `R` (temporal prior) or
-  `C^x` (structural step-function prior); that is the next direct intervention
-  worth running.
+The B-spline/Gaussian task results remain valid negative outcomes for those
+particular smoothing configurations. Bézier checkpoints are all-NaN, so its
+apparent task metrics are invalid. None of these tests establishes that all
+soft transport plans are harmful.
 
 ## Provenance
 
@@ -71,6 +63,7 @@ This re-weights the diagnosis:
   `63148876ba0ddfe58332b066f1211349f04b16b39f9f33b6b57feb7446ea9f99`)
 - Manifests: `reproductions/tssl/artifacts/runs/E07a_eps*_FSeval_s{0,1}/manifest.json`
 - Wandb project: `vasot-repro`, tags `E07a`, `eps_ablation`, `hypothesis_A`.
+- Solver-only and transport-plan recheck: `reports/E09_LIMITATION_RECHECK.md`.
 
 ## Follow-ups (not launched this session)
 

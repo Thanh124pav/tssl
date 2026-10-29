@@ -1,5 +1,11 @@
 # F00 — Final reproducibility audit and project report
 
+> **2026-10-29 recheck in progress:** This snapshot predates E08/E09 and the
+> paired seed-1 controls. Its A/C causal verdicts and Bézier task scores are
+> superseded by `reports/E09_LIMITATION_RECHECK.md`, the corrected E05 matrix,
+> and the forthcoming E08 transfer report. The commands in section 6 were
+> corrected to match actual R00/R01 manifests.
+
 **Date:** 2026-10-29
 **Branch:** `main` (uncommitted work: `V00 PROVENANCE.md`, `collect_e_results.py`,
 E05/E00/E07a/V01 reports, prepare script, run script).
@@ -157,8 +163,8 @@ cd /mnt/data/thanhpv/tssl/reproductions/tssl/repos/VASOT/src
 source /mnt/data/thanhpv/tssl/reproductions/env.sh
 conda activate acvcl
 python3 train.py -d desktop_assembly -ac all -c 22 -ne 30 \
-    --rho 0.25 -lat 0.25 -r 0.02 -ae 0.6 -at 0.3 \
-    -lr 1e-3 -wd 1e-4 -vf 5 -ua -g 0 --seed 0 \
+    --rho 0.25 -lat 0.16 -r 0.02 -ae 0.6 -at 0.3 \
+    -lr 1e-3 -wd 1e-4 -vf 5 -ua -g 0 -ls 512 128 40 --seed 0 \
     --wandb --wandb-project vasot-repro --run-id R00_DA_baseline_s0
 ```
 
@@ -169,13 +175,13 @@ cd /mnt/data/thanhpv/tssl/reproductions/tssl/repos/VASOT/src
 source /mnt/data/thanhpv/tssl/reproductions/env.sh
 conda activate acvcl
 python3 train.py -d YTI -ac coffee -c 10 -ne 30 \
-    --rho 0.15 -lat 0.11 -r 0.04 -ae 0.6 -at 0.3 \
-    -lr 1e-3 -wd 1e-4 -vf 5 -ua -g 0 --seed 0 -x -1 \
+    --rho 0.15 -lat 0.12 -r 0.04 -ae 0.6 -at 0.3 \
+    -lr 1e-4 -wd 1e-5 -vf 5 -g 0 -ls 3000 32 32 --seed 0 -x -1 \
     --wandb --wandb-project vasot-repro --run-id R01_YTI_coffee_s0
 ```
 
-Repeat for the other four activities (changing_tire, cpr, jump_car, repot)
-with `-c 10` and the same per-activity count. Aggregate = unweighted mean
+Repeat for the other four activities (changing_tire K=11, cpr K=7,
+jump_car K=12, repot K=8) with each activity's `-c` value. Aggregate = unweighted mean
 over the 5 activities.
 
 ### Continuous-curve experiments (E01/E03/E04 pipeline)

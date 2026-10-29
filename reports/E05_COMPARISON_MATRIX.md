@@ -21,8 +21,12 @@ S02 runs with manifests on disk.
 | E01_bspline_FSeval_s1 | 1 | 0.3681 | 0.4043 | 0.2141 | 0.1260 | -0.0427 | manifest |
 | E03_gauss_s2_FSeval_s0 | 0 | 0.3465 | 0.3967 | 0.2092 | — | — | manifest |
 | E03_gauss_s2_FSeval_s1 | 1 | 0.3880 | 0.4148 | 0.2368 | — | — | manifest |
-| E04_bezier_FSeval_s0 | 0 | 0.3533 | 0.2569 | 0.0294 | — | — | manifest |
-| E04_bezier_FSeval_s1 | 1 | 0.3543 | 0.2580 | 0.0295 | — | — | manifest |
+| E04_bezier_FSeval_s0 | 0 | 0.3533* | 0.2569* | 0.0294* | — | — | manifest; NaN checkpoint |
+| E04_bezier_FSeval_s1 | 1 | 0.3543* | 0.2580* | 0.0295* | — | — | manifest; NaN checkpoint |
+
+\* Both Bézier checkpoints have 13,960/13,960 non-finite model parameters.
+The reported metrics are produced by an invalid model and must not be used as
+valid task scores. The run status `completed` indicates process exit only.
 
 ## Variant summary (mean over 2 seeds)
 
@@ -32,40 +36,40 @@ S02 runs with manifests on disk.
 | Arc-length | 2 | 0.4649 | — | — | **-0.78** | FAIL |
 | B-spline | 2 | 0.3532 | 0.3988 | 0.2100 | **-11.95** | FAIL |
 | Gaussian (σ=2) | 2 | 0.3673 | 0.4057 | 0.2230 | **-10.55** | FAIL |
-| Bézier (4 seg) | 2 | 0.3538 | 0.2574 | 0.0295 | **-11.89** | FAIL |
+| Bézier (4 seg) | 2 | invalid | invalid | invalid | — | NUMERICAL FAILURE |
 
 ## Interpretation
 
-No continuous-representation variant passes the ≥ 1 pp scale gate. Every
-smoothing variant moves MoF down by ~10–12 pp; arc-length re-parameterisation
-alone is roughly neutral (-0.78 pp) but still negative in expectation, and it
-collapses badly on seed 1 (−5.0 pp) while helping on seed 0 (+3.4 pp).
+No continuous-representation variant passes the ≥ 1 pp scale gate. Valid
+B-spline and Gaussian runs reduce mean MoF by 10–12 pp. Arc-length
+re-parameterisation is roughly neutral (-0.78 pp) but differs by seed
+(+3.4 pp on seed 0, −5.0 pp on seed 1). Bézier is numerically invalid.
 
 Key diagnostic read-outs:
 
-- **B-spline softens T* exactly as predicted**: normalised row entropy of the
-  transport rises from the baseline ~0.055 (D01 measurement) to 0.119–0.126.
-  So the lever on Hypothesis A worked mechanically.
+- **B-spline changes the two transport plans differently.** E09's matched
+  50-pair/256-frame measurement finds `T_xa` top-1 mass 0.914→0.881, but
+  alignment `T_xy` top-1 mass 0.126→0.277. The older entropy figures
+  referred only to `T_xa` and used a different evaluation protocol.
 - **But boundary signal weakens**: boundary z-score goes from +0.047 to
   negative values (−0.024, −0.043), meaning the softened transport blurs the
   action transitions it was supposed to help diagnose (Hypothesis B).
 - **Representation geometry stays well-conditioned** (codebook condition
   3.1–3.4), so the collapse is not a numeric failure — the model is actually
   being driven toward a worse clustering.
-- **Bézier (adaptive 4-segment) collapses mIoU to ~0.03** on both seeds while
-  MoF stays ~0.35. That is a clustering degenerate: nearly all frames land in
-  one class. Likely a side-effect of segment fitting on top of CE on a
-  small-codebook problem; worth noting as a design failure, not a surprise fix
-  attempt.
+- **Bézier (adaptive 4-segment) fails numerically** on both seeds. Every
+  checkpoint parameter is NaN; the apparent mIoU ~0.03 and MoF ~0.35 come
+  from degenerate argmax evaluation of invalid transport plans. The method
+  needs a numerical fix before any task comparison is interpretable.
 
 ## Conclusion
 
-**Smoothing the discrete frame representation is not the right lever for
-VASOT's reported limitations.** The experiment refutes the mechanism
-"peaky T* ⇒ bad supervision ⇒ fix with continuous curves": the curves lower
-T* peakiness as expected but downstream segmentation gets worse, not better.
-Hypothesis A as *symptom* seems supported; Hypothesis A as *actionable root
-cause via smoothing* is refuted on FSeval.
+The tested X-space B-spline and Gaussian settings reduce FSeval task quality;
+arc-length misses the scale gate. Bézier cannot be assessed because training
+becomes non-finite. The stronger mechanism claim in the original E05 draft
+is withdrawn: E09 shows that B-spline/Gaussian make `T_xa` slightly softer
+but `T_xy` sharper on the same 50-pair protocol. The previous claim treated
+these different plans as one quantity.
 
 This matches the direction of the D04 aggregate (A: supported, B: partial,
 C: supported, with the strongest handle being C — the frame-index prior

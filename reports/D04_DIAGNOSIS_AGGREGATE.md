@@ -1,5 +1,15 @@
 # D04 — Aggregate Diagnosis Report: Hypotheses A/B/C
 
+> **2026-10-29 correction:** The entropy values in this report measure the
+> segmentation plan `T_xa`, not the alignment plan `T_xy`. The A verdict below
+> applies only to `T_xa`; the near-top-1 claim for `T_xy` is contradicted by
+> the direct 50-pair measurement in `reports/E09_LIMITATION_RECHECK.md`.
+> Cross-entropy also supplies repulsive gradients on unmatched logits through
+> softmax (`m_i P_j - T_j`, where `m_i = Σ_j T_j` over real targets), so "no
+> negative signal" is not correct for rows with nonzero real-target mass.
+> Read E09 for direct boundary F1 and the epsilon solver control. This
+> correction supersedes the causal interpretation in sections 2 and 5 below.
+
 **Status:** COMPLETE (all datasets covered)
 **Datasets covered:** Breakfast (5 activities), FS, FSeval, DA, YTI (all 5 activities)
 

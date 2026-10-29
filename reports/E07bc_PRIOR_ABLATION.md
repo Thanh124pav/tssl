@@ -5,11 +5,20 @@
 **Baseline config:** `configs/vasot/baselines/fs_eval.yaml` (lock
 `reports/E00_contract.lock`); `rho = 0.15`, `radius_gw = 0.04`.
 
+> **2026-10-29 correction:** The FSeval numbers below are valid, but several
+> causal claims in the original interpretation were not. `rho` weights the
+> temporal prior in **both** segmentation and alignment. E08 found `rho=0`
+> worsens Desktop Assembly and YTI seed-0 MoF; E11 is separating the two
+> pathways. E09 measured actual `T_xy` and found it is not near one-hot on
+> FSeval. Higher epsilon does not soften it in this solver. Bézier checkpoints
+> are all-NaN and their metrics must not be treated as valid.
+
 ## Motivation
 
-E07a (ε knob) + E01/E03/E04 (representation smoothing) jointly ruled out
-Hypothesis A as actionable: both levers that reduce T\*'s peakiness degrade
-MoF monotonically. The remaining diagnosis support in D03 points at
+E07a (ε knob) + E01/E03/E04 (representation smoothing) motivated a test of
+Hypothesis C, but do not rule out A: E09 subsequently showed that higher ε
+hardens `T_xy` in this implementation, while the smoothing variants affect
+`T_xa` and `T_xy` differently. The remaining diagnosis support in D03 points at
 **Hypothesis C** — the frame-index prior encoded by `R` (temporal prior scaled
 by `rho`) and `C^x` (structural diagonal prior with band width `radius_gw`).
 Those two knobs are the direct interventions on C.
@@ -56,18 +65,19 @@ the frozen `fs_eval.yaml`.
 
 ## Headline
 
-1. **`rho` is the actionable lever for Hypothesis C.** Both `rho = 0.00` and
+1. **`rho` is an effective FSeval lever, not a general solution to C.** Both `rho = 0.00` and
    `rho = 0.05` pass the ≥1 pp scale gate, with `rho = 0` giving the biggest
    margin yet seen in this project (+7.95 pp MoF, +4.20 pp mIoU on FSeval mean).
-   The improvement is **monotonic** in `rho ↓` and present on both seeds —
-   not a single-seed artefact.
+   The two-seed mean improves as `rho` decreases, although the per-seed
+   response is not monotonic. E08 shows this effect does not transfer to
+   Desktop Assembly or YTI seed 0.
 2. **`radius_gw` is NOT the lever.** Widening `C^x`'s band by 3× moderately
    hurts (−2.85 pp); by 12× it collapses MoF to 0.32. The structural prior
    is apparently load-bearing at its tight-band baseline value and does not
    want to be relaxed by itself.
-3. The two priors behave very differently under direct ablation. Hypothesis
-   C should be sharpened to *the temporal prior `R`*; `C^x` is a different
-   mechanism that we should not conflate with it.
+3. The two knobs behave differently, but `rho` affects both the segmentation
+   and alignment temporal priors. The current ablation cannot attribute the
+   FSeval gain to one pathway; E11 is designed to do that.
 
 ## Full E-phase matrix (all variants on FSeval, from `collect_e_results.py`)
 
@@ -77,7 +87,7 @@ the frozen `fs_eval.yaml`.
 | Arc-length | 2 | 0.4649 | −0.78 | FAIL |
 | B-spline | 2 | 0.3532 | −11.95 | FAIL |
 | Gaussian σ=2 | 2 | 0.3673 | −10.55 | FAIL |
-| Bézier 4-seg | 2 | 0.3538 | −11.89 | FAIL |
+| Bézier 4-seg | 2 | invalid (NaN checkpoints) | — | NUMERICAL FAILURE |
 | ε = 0.15 (E07a) | 2 | 0.3237 | −14.90 | FAIL |
 | ε = 0.30 (E07a) | 2 | 0.2140 | −25.87 | FAIL |
 | **rho = 0.05 (E07b)** | 2 | **0.5138** | **+4.10** | **PASS** |
@@ -91,17 +101,15 @@ The project brief listed smoothening the discrete representation (B-spline /
 Bézier / arc-length) as the proposal to test against limitations A/B/C. The
 E-phase matrix now shows:
 
-- The smoothing proposals were **all** below baseline on FSeval.
-- The direct intervention on A (`ε`) was also below baseline.
-- The direct intervention on C via `rho` is **the only variant that improves
-  the baseline** — and does so by a wide, both-seed margin.
+- The finite smoothing proposals tested here were below baseline on FSeval.
+- Increasing training ε worsened performance but also caused solver/transport
+  degeneration; it cannot test whether softer `T_xy` would help.
+- `rho=0` improved FSeval but worsened DA and YTI in seed 0.
 
-The right reading is: VASOT's main actionable weakness on FSeval is **the
-temporal prior `R` itself**, not the peakiness of the resulting transport
-plan. Smoothing variants reduce T\*'s peakiness as a *downstream* effect of
-their reparameterisation, which is why they fail — they are symptom-level
-interventions on a working mechanism, while leaving the harmful index-prior
-untouched.
+The defensible reading is narrower: FSeval is sensitive to temporal-prior
+weighting, but neither the responsible pathway nor a dataset-general fix has
+been established. E09 found that the original explanation via a nearly
+one-hot alignment plan was incorrect on its measured FSeval protocol.
 
 ## Provenance
 
@@ -113,12 +121,15 @@ untouched.
 - Collect script: `reproductions/tssl/scripts/collect_e_results.py`
   (updated to recognise E07a/E07b/E07c run_ids).
 
-## Follow-ups
+## Follow-ups and status
 
-- **E08 — scale `rho=0` to DA and YTI** with paired seeds, using the exact
-  baseline configs of each dataset. This is the first variant worth
-  cross-dataset validation; the ≥1 pp scale gate on FSeval is cleared.
-- **E09 — joint ablation**: `rho=0` AND `radius_gw ∈ {0.04 (baseline), 0.12}`
-  to check whether `rho=0` also makes the structural prior easier to relax.
-- **E07d — Hypothesis B direct intervention** (boundary-aware auxiliary head).
-  Deferred until E08 confirms whether C's lever generalises off FSeval.
+- **E08 completed:** `rho=0` loses 3.23 pp MoF on DA and 4.17 pp on the
+  five-activity YTI mean over paired seeds; see `E08_RHO0_TRANSFER.md`.
+- **E09 completed:** actual `T_xy` support and direct boundary metrics revise
+  the A/B interpretation; see `E09_LIMITATION_RECHECK.md`. The originally
+  proposed joint `rho × radius_gw` ablation was not run because E08 failed
+  the cross-dataset transfer check.
+- **E11 running:** separate the segmentation and alignment uses of `rho` on
+  FSeval before attributing the local gain to one prior.
+- **Hypothesis B intervention remains open:** E09 measures boundary errors,
+  but no boundary-aware training loss has been tested.

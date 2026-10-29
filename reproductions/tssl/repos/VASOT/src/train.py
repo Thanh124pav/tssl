@@ -31,9 +31,11 @@ class VideoSSL(pl.LightningModule):
                  n_ot_train=[50, 1], n_ot_eval=[50, 1], step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=False,
                  lambda_frames_train=0.05, lambda_actions_train=0.05, lambda_frames_eval=0.05, lambda_actions_eval=0.01,
                  temp=0.1, radius_gw=0.04,learn_clusters=True, n_frames=256, rho=0.1, beta=1, exclude_cls=None, visualize=False, activity=None,
+                 rho_seg=None, rho_align=None,
                  arc_reparam=False, arc_warmup_epochs=5,
                  bspline=False, bspline_tol=0.05, bspline_kmax=0, bspline_warmup_epochs=5,
                  bspline_space='X', bspline_blend_max=1.0, bspline_blend_rampup=0,
+                 latent_dim=16,
                  gauss_smooth=False, gauss_sigma=2.0, gauss_blend_max=1.0, gauss_warmup_epochs=5,
                  bezier=False, bezier_nseg=4, bezier_tol=0.05, bezier_maxseg=32,
                  bezier_warmup_epochs=5, bezier_space='X', bezier_blend_max=1.0, bezier_blend_rampup=0):
@@ -64,6 +66,8 @@ class VideoSSL(pl.LightningModule):
         self.temp = temp
         self.n_frames = n_frames
         self.rho = rho
+        self.rho_seg = rho if rho_seg is None else rho_seg
+        self.rho_align = rho if rho_align is None else rho_align
         self.beta = beta
         self.arc_reparam = arc_reparam
         self.arc_warmup_epochs = arc_warmup_epochs
@@ -71,7 +75,8 @@ class VideoSSL(pl.LightningModule):
         self.bspline_tol = bspline_tol
         self.bspline_kmax = bspline_kmax if bspline_kmax > 0 else None
         self.bspline_warmup_epochs = bspline_warmup_epochs
-        self.bspline_space = bspline_space   # 'X' (frame embedding) or 'logits' (action-space)
+        self.bspline_space = bspline_space   # 'X' (frame embedding), 'logits' (action-space via clusters), or 'latent' (dedicated learnable bottleneck)
+        self.latent_dim = latent_dim
         self.bspline_blend_max = bspline_blend_max
         self.bspline_blend_rampup = bspline_blend_rampup
         self.gauss_smooth = gauss_smooth
@@ -95,6 +100,14 @@ class VideoSSL(pl.LightningModule):
         d = self.layer_sizes[-1]
         self.clusters = nn.parameter.Parameter(data=F.normalize(torch.randn(self.n_clusters, d), dim=-1),
                                                requires_grad=learn_clusters)
+
+        # Dedicated learnable latent basis for bspline_space='latent' (E10b).
+        # Shape (latent_dim, d), unit-norm rows at init.  Trains through the
+        # downstream CE loss just like `clusters` does.
+        self.latent_basis = nn.parameter.Parameter(
+            data=F.normalize(torch.randn(self.latent_dim, d), dim=-1),
+            requires_grad=True,
+        )
 
         #TODO: Need to replace with evaluation metrics for video alignment
         self.activity = activity
@@ -125,11 +138,19 @@ class VideoSSL(pl.LightningModule):
             if self.bspline_space == 'X':
                 smoothed = bspline_smooth_X(features, mask, u_target=None,
                                             tol=self.bspline_tol, k_max=self.bspline_kmax)
-            else:
+            elif self.bspline_space == 'logits':
                 L = features @ self.clusters.T.unsqueeze(0)
                 L_smoothed = bspline_smooth_X(L, mask, u_target=None,
                                               tol=self.bspline_tol, k_max=self.bspline_kmax)
                 smoothed = L_smoothed @ self.clusters.unsqueeze(0)
+            elif self.bspline_space == 'latent':
+                # E10b: dedicated learnable bottleneck. (latent_dim,) subspace.
+                Z = features @ self.latent_basis.T.unsqueeze(0)
+                Z_smoothed = bspline_smooth_X(Z, mask, u_target=None,
+                                              tol=self.bspline_tol, k_max=self.bspline_kmax)
+                smoothed = Z_smoothed @ self.latent_basis.unsqueeze(0)
+            else:
+                raise ValueError(f"unknown bspline_space={self.bspline_space!r}")
             blend = self._ramp(self.bspline_blend_max, self.bspline_warmup_epochs, self.bspline_blend_rampup)
             features = F.normalize((1 - blend) * features + blend * smoothed, dim=-1)
         if self.training and self.gauss_smooth and self.current_epoch >= self.gauss_warmup_epochs:
@@ -195,13 +216,15 @@ class VideoSSL(pl.LightningModule):
 
         with torch.no_grad():
             self.clusters.data = F.normalize(self.clusters.data, dim=-1)
+            # Keep latent_basis rows unit-norm (parallels the clusters normalization).
+            self.latent_basis.data = F.normalize(self.latent_basis.data, dim=-1)
 
         ##FIND SEGMENTATION LOSS FOR X
         codes_segmentation_X = torch.exp(features_X @ self.clusters.T[None, ...] / self.temp)
         codes_segmentation_X = codes_segmentation_X / codes_segmentation_X.sum(dim=-1, keepdim=True)
 
         with torch.no_grad():  # pseudo-labels from OT
-            temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho,
+            temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho_seg,
                                                                          features_X.device)
             cost_matrix_segmentation_X = 1. - features_X @ self.clusters.T.unsqueeze(0)
             cost_matrix_segmentation_X += temp_prior_segmentation_X
@@ -226,7 +249,7 @@ class VideoSSL(pl.LightningModule):
         codes_segmentation_Y = codes_segmentation_Y / codes_segmentation_Y.sum(dim=-1, keepdim=True)
 
         with torch.no_grad():  # pseudo-labels from OT
-            temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho,
+            temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho_seg,
                                                                          features_Y.device)
             cost_matrix_segmentation_Y = 1. - features_Y @ self.clusters.T.unsqueeze(0)
             cost_matrix_segmentation_Y += temp_prior_segmentation_Y
@@ -260,7 +283,7 @@ class VideoSSL(pl.LightningModule):
         with torch.no_grad():
             # Calculate the KOT cost matrix from the paragraph above Eq (7)
             # ρR = rho * Temporal prior
-            temp_prior = alignment_ot.temporal_prior(T_X, T_Y, self.rho, features_X.device)
+            temp_prior = alignment_ot.temporal_prior(T_X, T_Y, self.rho_align, features_X.device)
             # Cost Matrix Ck from section 4.2, no need to divide by norms since both vectors were previously normalized with F.normalize()
             cost_matrix = 1. - features_X @ features_Y.transpose(1, 2)
             # Ĉk = Ck + ρR
@@ -320,7 +343,7 @@ class VideoSSL(pl.LightningModule):
         )
         features_Y, u_Y_eval = self._maybe_warp(features_Y, mask_Y)
 
-        temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho,
+        temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho_seg,
                                                                      features_X.device)
         cost_matrix_segmentation_X = 1. - features_X @ self.clusters.T.unsqueeze(0)
         cost_matrix_segmentation_X += temp_prior_segmentation_X
@@ -334,7 +357,7 @@ class VideoSSL(pl.LightningModule):
                                                                      n_iters=self.n_ot_train,
                                                                      step_size=self.step_size)
 
-        temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho,
+        temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho_seg,
                                                                      features_Y.device)
         cost_matrix_segmentation_Y = 1. - features_Y @ self.clusters.T.unsqueeze(0)
         cost_matrix_segmentation_Y += temp_prior_segmentation_Y
@@ -408,7 +431,7 @@ class VideoSSL(pl.LightningModule):
         )
         features_Y, u_Y_eval = self._maybe_warp(features_Y, mask_Y)
 
-        temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho,
+        temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho_seg,
                                                                      features_X.device)
         cost_matrix_segmentation_X = 1. - features_X @ self.clusters.T.unsqueeze(0)
         cost_matrix_segmentation_X += temp_prior_segmentation_X
@@ -422,7 +445,7 @@ class VideoSSL(pl.LightningModule):
                                                            n_iters=self.n_ot_train,
                                                            step_size=self.step_size)
 
-        temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho,
+        temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho_seg,
                                                                      features_Y.device)
         cost_matrix_segmentation_Y = 1. - features_Y @ self.clusters.T.unsqueeze(0)
         cost_matrix_segmentation_Y += temp_prior_segmentation_Y
@@ -575,6 +598,10 @@ if __name__ == '__main__':
     parser.add_argument('--weight-decay', '-wd', type=float, default=1e-4, help='weight decay for optimizer')
     parser.add_argument('--layers', '-ls', default=[64, 128, 40], nargs='+', type=int, help='layer sizes for MLP (in, hidden, ..., out)')
     parser.add_argument('--rho', type=float, default=0.1, help='Factor for global structure weighting term')
+    parser.add_argument('--rho-seg', type=float, default=None,
+                        help='Override temporal prior weight for segmentation (default: --rho)')
+    parser.add_argument('--rho-align', type=float, default=None,
+                        help='Override temporal prior weight for alignment (default: --rho)')
     parser.add_argument('--n-clusters', '-c', type=int, default=8, help='number of actions/clusters')
     parser.add_argument('--beta', '-b', type=float, default=1,
                         help='the weight used when combining alignment and segmentation losses')
@@ -596,8 +623,10 @@ if __name__ == '__main__':
     parser.add_argument('--bspline-tol', type=float, default=0.05, help='reconstruction tolerance for adaptive knot insertion')
     parser.add_argument('--bspline-kmax', type=int, default=0, help='max number of control points (0 = N//8)')
     parser.add_argument('--bspline-warmup-epochs', type=int, default=5, help='epochs of identity before bspline kicks in')
-    parser.add_argument('--bspline-space', type=str, default='X', choices=['X', 'logits'],
-                        help='fit B-spline on frame embedding X (default) or on action logits X·A^T')
+    parser.add_argument('--bspline-space', type=str, default='X', choices=['X', 'logits', 'latent'],
+                        help="fit B-spline on 'X' (frame embedding), 'logits' (action-space via clusters), or 'latent' (E10b: dedicated learnable bottleneck)")
+    parser.add_argument('--latent-dim', type=int, default=16,
+                        help="E10b: dim of dedicated learnable latent basis when --bspline-space=latent")
     parser.add_argument('--bspline-blend-max', type=float, default=1.0, help='residual blend coefficient at max (0=off, 1=full)')
     parser.add_argument('--bspline-blend-rampup', type=int, default=0, help='epochs over which blend ramps from 0 to blend-max')
     parser.add_argument('--gauss-smooth', action='store_true', help='E2d: Gaussian smoothing along time axis')
@@ -648,10 +677,11 @@ if __name__ == '__main__':
                        ub_frames=args.ub_frames, ub_actions=args.ub_actions, lambda_frames_train=args.lambda_frames_train, lambda_frames_eval=args.lambda_frames_eval,
                        lambda_actions_train=args.lambda_actions_train, lambda_actions_eval=args.lambda_actions_eval, step_size=args.step_size,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
-                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
+                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
                        arc_reparam=args.arc_reparam, arc_warmup_epochs=args.arc_warmup_epochs,
                        bspline=args.bspline, bspline_tol=args.bspline_tol, bspline_kmax=args.bspline_kmax, bspline_warmup_epochs=args.bspline_warmup_epochs,
                        bspline_space=args.bspline_space, bspline_blend_max=args.bspline_blend_max, bspline_blend_rampup=args.bspline_blend_rampup,
+                       latent_dim=args.latent_dim,
                        gauss_smooth=args.gauss_smooth, gauss_sigma=args.gauss_sigma,
                        gauss_blend_max=args.gauss_blend_max, gauss_warmup_epochs=args.gauss_warmup_epochs,
                        bezier=args.bezier, bezier_nseg=args.bezier_nseg, bezier_tol=args.bezier_tol,
