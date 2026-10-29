@@ -503,6 +503,97 @@ pre-register; nếu boundary nhiễu, temporal scaling sẽ khuếch đại labe
 **Exit criterion:** paired task/boundary/alignment-proxy metrics và kiểm tra
 không collapse dưới warp mạnh.
 
+
+### Phase N — New theory: relational, transition, and reparameterization-aware alignment
+
+**Research contract (2026-10-30).** Phase N is a NEW exploration track, not a reinterpretation of the completed limitation hypotheses D01–D04. Each direction has a low-risk **incremental/diagnostic** task and a gated **theory/novelty** task. Run the incremental task first; a better task score alone is not evidence of theoretical novelty. Preserve the frozen VASOT baseline and paired seeds; never use GT labels/boundaries to train. Distinguish the segmentation plan `T_xa` from alignment plan `T_xy` in every diagnostic. E09 found `T_xy` soft (not near one-hot); E14/E15 found poor low-capacity spline fit, which does not establish impossibility of a regular latent manifold. Do not claim causal identification from predictive influence or attention weights. A new method must beat appropriate simple controls, document prior art including non-CV work, and establish either a new identifiability/recovery property, a counterexample to the baseline, or a clearly justified optimization principle.
+
+#### [ ] N-A1 — Incremental diagnostic: dynamics-aware structural cost
+
+**Question:** Is frame-index proximity an inadequate proxy for within-video structural similarity, and can local dynamics features improve matching without changing GW itself?
+
+**Tasks:**
+- On frozen checkpoints quantify within-action/inter-action roughness, temporal neighbor rank, transition similarity and GT evaluation-only alignment errors, stratified by action duration and boundary distance.
+- Compare the existing temporal-index `C^X,C^Y` with (i) feature-distance structure, (ii) local-window velocity/transition structure, and (iii) a learned dynamics encoder; report cost scale and sensitivity to feature jitter.
+- Plug each structure into the SAME single-FGW solver, with the original cross-video cost, priors, marginals, budget and paired seeds unchanged. Use random/shuffled dynamics, index cost and no-structure controls. Record solver runtime and transport support.
+- Explicitly distinguish an improvement from merely removing a harmful segmentation prior (`rho_seg`) or changing optimization difficulty.
+
+**Deliverable:** `reports/NA1_DYNAMICS_COST_DIAGNOSIS.md`, comparable metrics, run manifests and at least one falsifiable failure case.
+
+**Exit criterion:** a paired-seed table and mechanistic evidence showing whether dynamics-aware cost captures a relationship missed by temporal index; otherwise stop A2 scaling.
+
+#### [ ] N-A2 — Theory/novelty: relational distributional transport
+
+**Hypothesis:** A scalar temporal distance may not identify differences between stochastic transitions that are distinguishable from relational transition distributions.
+
+**Tasks:**
+- Define per-pair relational laws `Q^X_{ik}`, `Q^Y_{jl}` (conditional transition distributions, not arbitrary embeddings), plus a well-defined divergence `D(Q^X_{ik},Q^Y_{jl})`. State assumptions, sample availability, and what is identifiable from passive video.
+- Formulate distributional relational transport with objective `sum_{ikjl} D(Q^X_{ik},Q^Y_{jl}) T_ij T_kl`; specify constraints, computational strategy and reduction to an existing scalar-GW baseline as a special case.
+- Construct a controlled counterexample where frame-index or scalar-distance GW confuses distinct transition processes, with proof or explicitly scoped proposition and counterexample to overbroad claims.
+- Compare against learned scalar GW, dynamics-cost N-A1, a generic distributional metric control, and existing relational/distributional OT literature (not only CV).
+
+**Gate:** only proceed after N-A1 identifies a reproducible structural mismatch that distributions could plausibly distinguish.
+
+**Exit criterion:** written mathematical statement with assumptions/proof or documented counterexample, complexity analysis and a synthetic test validating the distinguishing property before dataset-scale runs.
+
+#### [ ] N-B1 — Incremental diagnostic: transition-aware matching and gradient conflict
+
+**Question:** Does segmentation share action identity but fail to preserve within-action transition phase, explaining why E13 action bridge barely helps alignment?
+
+**Tasks:**
+- Measure same-action versus same-phase correspondence (phase labels for evaluation only where valid), within-action transition separability, transport stability under small embedding perturbations and gradient cosine of segmentation/alignment objectives.
+- Implement a controlled local transition encoder and transition-cost-only single-OT baseline; compare state-only, action-posterior bridge E13, transition-cost-only and combined-cost under equal compute.
+- Test temporal-window and directed-vs-symmetric transition features; record whether gains are from phase correspondence or merely higher same-action transport mass.
+- Do not equate directional temporal prediction with intervention-defined causality.
+
+**Deliverable:** `reports/NB1_TRANSITION_ALIGNMENT_DIAGNOSIS.md`, phase and alignment-proxy metrics with paired seeds.
+
+**Exit criterion:** isolate at least one repeatable mismatch between state/action matching and transition correspondence, or document negative evidence and stop B2 escalation.
+
+#### [ ] N-B2 — Theory/novelty: transition-commutative transport
+
+**Hypothesis:** A correct correspondence should intertwine state-transition operators, not merely preserve pairwise temporal distances.
+
+**Tasks:**
+- Model video dynamics as stochastic kernels `P_X,P_Y` and normalize the alignment `A` consistently; study the commutator residual `||P_X A - A P_Y||` with compatible matrix dimensions and nontrivial marginal/anti-collapse constraints.
+- Derive when zero/small commutator implies useful correspondence, including counterexamples from repeated states, stationary processes, lumpability and operator symmetries. Clearly distinguish predictive transitions from causal mechanisms.
+- Develop an optimization method coupling (F)GW with commutativity; compare to direct transition-cost OT and an attention-only transition predictor. Analyze computational cost and the effect of pseudo-transition noise.
+- Test synthetic Markov systems with known correspondence and confounders before FSeval. Explore time-rescaled operators only AFTER the unwarped case works (N-C2).
+
+**Gate:** N-B1 demonstrates information in transitions that existing action/state matching misses.
+
+**Exit criterion:** formal proposition/counterexample plus nondegenerate recovery experiment and controlled paired-seed comparison, not just improved MoF.
+
+#### [ ] N-C1 — Incremental diagnostic: nonlinear temporal-warp stress test
+
+**Question:** Does VASOT's temporal-index FGW impose structural penalties on semantically corresponding videos after local speed changes?
+
+**Tasks:**
+- Construct monotone piecewise temporal warps of the SAME video and of aligned video pairs; preserve action ordering and report interpolation policy, speed ratios and warp severity.
+- Evaluate the exact current `C^X,C^Y`, diagonal `rho_align` and transport solver separately. Measure oracle-correspondence structural distortion, alignment error, solver feasibility, and transport entropy/support at fixed checkpoint.
+- Controls: unwarped, global speed warp, piecewise warp, fixed-index FGW, index-prior removal, standard DTW/soft-DTW or Gromov-DTW where applicable; disentangle cost effects from interpolation artifacts.
+- B-spline is OPTIONAL to parametrize a *monotone scalar time warp*, NOT to fit high-dimensional frame embeddings (E14/E15); first use linear/piecewise interpolation.
+
+**Deliverable:** `reports/NC1_TEMPORAL_WARP_STRESS.md` plus a reproducible counterexample and sensitivity plots.
+
+**Exit criterion:** identify a reproducible warp regime where the correct correspondence incurs avoidable structural distortion and establish whether the effect is from GW structure or diagonal prior; otherwise stop C2 scaling.
+
+#### [ ] N-C2 — Theory/novelty: quotient-space, time-reparameterized transport
+
+**Hypothesis:** Trajectories representing the same ordered dynamics should be compared modulo admissible monotone time reparameterizations, potentially together with transition intertwining.
+
+**Tasks:**
+- Define admissible warp class `Gamma`, equivalence relation (if truly valid), objective on trajectory classes and regularity/non-collapse constraints. State when an infimum over warps yields actual invariance versus only regularized robustness.
+- Formulate joint alignment-and-warp optimization; compare explicit warp functions (monotone splines with positive increments) with a standard Gromov-DTW/elastic alignment baseline. Prove or falsify invariance/recovery under clearly scoped assumptions.
+- Analyze identifiability and degeneracies (repeated actions, constant paths, noninvertible warps, partial/missing steps). Establish whether dynamics-intertwining (N-B2) supplies strictly new constraints; do not claim it without a separating example.
+- Validate on synthetic nonlinear speed changes before paired FSeval; record warp estimation, alignment correctness, computational cost and original action-segmentation metrics.
+
+**Gate:** N-C1 establishes a structural warp failure not solved by a simple existing alignment baseline, or provides a theory-motivated case worth testing.
+
+**Exit criterion:** an explicit mathematical claim and proof/counterexample, comparison with non-CV elastic/SRVF and Gromov-DTW prior work, and synthetic evidence that isolates a novel advantage.
+
+**Recommended dependency:** `E09/E13/E14 → N-A1, N-B1, N-C1`; `N-A1 → N-A2`; `N-B1 → N-B2`; `N-C1 → N-C2`. Do not launch A2/B2/C2 together. Revisit shared B2+C2 only if their separate failure modes are verified.
+
 ### Phase F — Finalize
 
 #### [ ] F00 — Reproducibility audit và final report
@@ -563,6 +654,12 @@ Không cần chờ VAOT xong mới làm diagnostics VASOT, nhưng không chạy 
 | E05 | E02–E04 | GPU | 1–2 per session | controlled model selection |
 | E06 | E05 + gate | GPU | 1 per session | cross-dataset validation |
 | E07 | D04 + E05 | GPU | 1–2 per session | mechanism controls |
+| N-A1 | E09 + E14 + E00 | CPU/GPU | 1–2 | dynamics-cost diagnosis |
+| N-A2 | N-A1 gate | CPU; GPU optional | 0–2 | distributional relational transport theory |
+| N-B1 | E09 + E13 + E00 | CPU/GPU | 1–2 | transition diagnostic |
+| N-B2 | N-B1 gate | CPU; GPU optional | 0–2 | commutative-transport theory |
+| N-C1 | E09 + E14 | CPU/GPU | 0–2 | nonlinear-warp stress test |
+| N-C2 | N-C1 gate | CPU; GPU optional | 0–2 | quotient temporal transport theory |
 | F00 | completed tracks | CPU | 0 | final audit/report |
 
 ## 7. Session ledger
@@ -611,6 +708,12 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | E15a | DONE | reports/E15_BOUNDARY_AWARE_FIT_RESULTS.md, 12 fit audits | Piecewise/repeated-knot-equivalent ceiling fails fit gate even with GT boundaries; ASOT under-segments, posterior changes over-segment. Training stopped. |
 | E15b | PENDING | smoothing-spline/Pareto fitter | Replace exact max-error objective with held-out reconstruction vs roughness/capacity selection; linear interpolation control required. |
 | E16 | PENDING | | Segment-wise temporal scaling augmentation, gated by reliable pseudo-boundaries. |
+| N-A1 | PENDING | | Incremental dynamics-aware structural cost |
+| N-A2 | PENDING | | Novel relational distributional transport; gated by N-A1 |
+| N-B1 | PENDING | | Incremental transition/phase diagnostics |
+| N-B2 | PENDING | | Novel transition-commutative transport; gated by N-B1 |
+| N-C1 | PENDING | | Incremental nonlinear temporal-warp diagnostics |
+| N-C2 | PENDING | | Novel quotient-space time-reparameterized transport; gated by N-C1 |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án
