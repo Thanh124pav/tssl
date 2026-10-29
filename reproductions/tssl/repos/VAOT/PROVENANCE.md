@@ -63,8 +63,8 @@ No Python 3.6-specific constructs found.
 - **Pouring:** frames at `/mnt/data/thanhpv/acvcl/data/pouring/sermanet_pouring/frames/{train,test}/`
   - FLAT structure (422 train frames, 376 test frames) — VAOT expects per-video directories
   - Need to check if this is per-video or if reorganization needed
-- **Penn Action:** NOT FOUND
-- **IKEA ASM:** NOT FOUND
+- **Penn Action:** NOT FOUND on cluster (vinhbk/datasets/penn is Penn Treebank NLP, not Penn Action video)
+- **IKEA ASM:** NOT FOUND on cluster
 - **npyrecords (labels):** NOT FOUND — evaluations.py expects `./npyrecords/pouring_val.npy`
 
 ### Code Issues Found

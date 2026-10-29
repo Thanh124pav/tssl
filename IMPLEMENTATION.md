@@ -520,19 +520,19 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | D03 | DONE | 13 datasets | C: SUPPORTED — idx_sem_corr 0.063-0.516, weakest on YTI |
 | D04 | DONE | reports/D04_DIAGNOSIS_AGGREGATE.md | Full aggregate report with hypothesis verdicts |
 | V00 | DONE | VAOT/PROVENANCE.md | Clean import, provenance, import test. PL 2.x porting needed (train.py, evaluations.py). Pouring data found but flat structure. Penn/IKEA/npyrecords missing. |
-| V01 | TODO | | Data/npyrecords chưa audit hoàn chỉnh |
-| V02 | TODO | | |
+| V01 | DONE | reports/V01_VAOT_DATA_AUDIT.md | Pouring usable after reorg (.mov → per-video frames, labels from pkl); Penn/IKEA missing — V04 blocked |
+| V02 | TODO | | Prep script + PL 2.x porting required before smoke |
 | V03 | TODO | | |
-| V04 | TODO | | |
-| E00 | TODO | | |
-| E01 | PARTIAL | | 4 E2 run bị ngắt, identity ambiguous |
-| E02 | TODO | | |
-| E03 | TODO | | Code Gaussian đã có, experiment chưa đóng |
-| E04 | DONE | bezier.py + 5 tests + train.py integration | Piecewise cubic Bézier with C1, adaptive segments, 8/8 tests pass |
-| E05 | TODO | | |
-| E06 | TODO | | |
-| E07 | TODO | | |
-| F00 | TODO | | |
+| V04 | BLOCKED | | Penn Action and IKEA ASM not present on cluster |
+| E00 | DONE | reports/E00_EXPERIMENT_CONTRACT.md + E00_contract.lock | Contract backfilled, baseline config hash pinned |
+| E01 | DONE | E01_bspline_FSeval_s{0,1} | B-spline paired seeds complete; mean MoF -11.95pp vs baseline |
+| E02 | DONE | subsumed by E01 (paired-seed B-spline) | |
+| E03 | DONE | E03_gauss_s2_FSeval_s{0,1} | Gaussian σ=2 paired seeds; mean MoF -10.55pp |
+| E04 | DONE | bezier.py + 5 tests + train.py integration; E04_bezier_FSeval_s{0,1} | mean MoF -11.89pp (mIoU collapsed to 0.03) |
+| E05 | DONE | reports/E05_COMPARISON_MATRIX.md | All variants fail scale gate; E06 skipped |
+| E06 | SKIP | | Gate not passed on FSeval; scaling to DA/YTI unjustified |
+| E07a | DONE | reports/E07a_EPS_ABLATION.md | 4 runs on FSeval; ε↑ monotonically harms (−14.9 pp, −25.9 pp) — A refuted as actionable |
+| F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án
 

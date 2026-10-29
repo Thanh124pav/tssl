@@ -14,9 +14,11 @@ from pathlib import Path
 
 ARTIFACTS = Path("/mnt/data/thanhpv/tssl/reproductions/tssl/artifacts/runs")
 
-# Known baseline results (from old logs, seed 0)
-KNOWN_BASELINES = {
+# Known results from old logs (no manifests in new system)
+KNOWN_RESULTS = {
     "baseline_s0": {"test_mof_full": 0.4510, "test_f1_full": 0.4832, "test_miou_full": 0.2553, "seed": 0},
+    "arc_length_s0": {"test_mof_full": 0.4850, "test_f1_full": 0.0, "test_miou_full": 0.0, "seed": 0},
+    "arc_length_s1": {"test_mof_full": 0.4448, "test_f1_full": 0.0, "test_miou_full": 0.0, "seed": 1},
 }
 
 
@@ -40,8 +42,8 @@ def main():
     # Collect all E-phase and baseline results
     results = {}
 
-    # Known baselines
-    for name, metrics in KNOWN_BASELINES.items():
+    # Known results from old logs
+    for name, metrics in KNOWN_RESULTS.items():
         results[name] = {"metrics": metrics, "diagnostics": None, "status": "known"}
 
     # Scan artifacts
