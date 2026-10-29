@@ -53,7 +53,7 @@ def sample_frames(frames, num_frames, num_context, frame_stride,
                 steps = np.arange(seq_len)
             f = len(steps) / num_frames
 
-            sampled_idxes = np.arange(num_frames) * f + np.array(random.choices(range(np.int(f)), k=num_frames))
+            sampled_idxes = np.arange(num_frames) * f + np.array(random.choices(range(int(f)), k=num_frames))
             sampled_idxes = sampled_idxes.astype(np.int32)
 
             steps = np.sort(steps[sampled_idxes])

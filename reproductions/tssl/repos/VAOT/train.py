@@ -13,8 +13,7 @@ import align_dataset
 # import align_dataset_multi_action
 from models import BaseModel, ConvEmbedder
 from config import CONFIG
-from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.core.lightning import LightningModule
+from pytorch_lightning import Trainer, seed_everything, LightningModule
 from pytorch_lightning.loggers import CSVLogger
 
 import torch
@@ -190,13 +189,13 @@ def main(hparams):
         checkpoint_callback = utils.CheckpointEveryNSteps(hparams.TRAIN.SAVE_INTERVAL_ITERS, filepath=os.path.join(hparams.CKPT_PATH, 'STEPS'))
         csv_logger = CSVLogger(save_dir=hparams.CKPT_PATH.strip('/').split('/')[-2], name="lightning_logs")
 
-        trainer = Trainer(gpus=[hparams.GPUS], max_epochs=hparams.TRAIN.EPOCHS, default_root_dir=hparams.ROOT,
-                          deterministic=True, callbacks=[checkpoint_callback], 
+        trainer = Trainer(devices=[hparams.GPUS], accelerator='gpu',
+                          max_epochs=hparams.TRAIN.EPOCHS, default_root_dir=hparams.ROOT,
+                          deterministic=True, callbacks=[checkpoint_callback],
                           limit_val_batches=0, check_val_every_n_epoch=0, num_sanity_val_steps=0,
-                          logger=csv_logger, log_every_n_steps=5,
-                          resume_from_checkpoint=checkpoint_path)
+                          logger=csv_logger, log_every_n_steps=5)
 
-        trainer.fit(model)
+        trainer.fit(model, ckpt_path=checkpoint_path)
 
     except KeyboardInterrupt:
         print("Interrupted by user. Exiting...")

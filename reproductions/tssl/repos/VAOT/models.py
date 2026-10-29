@@ -80,8 +80,9 @@ class BaseModel(nn.Module):
 
     def __init__(self, pretrained=True):
         super(BaseModel, self).__init__()
-        
-        resnet = models.resnet50(pretrained=pretrained)
+
+        weights = models.ResNet50_Weights.IMAGENET1K_V1 if pretrained else None
+        resnet = models.resnet50(weights=weights)
         layers = list(resnet.children())[:-3]
         layers[-1] = nn.Sequential(*list(layers[-1].children())[:-3])
         self.base_model = nn.Sequential(*layers)
