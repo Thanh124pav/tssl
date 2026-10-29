@@ -20,3 +20,12 @@ def test_rho_overrides_are_independent():
     align0 = VideoSSL(rho=0.15, rho_align=0.0)
     assert (seg0.rho_seg, seg0.rho_align) == (0.0, 0.15)
     assert (align0.rho_seg, align0.rho_align) == (0.15, 0.0)
+
+
+def test_latent_basis_is_optional_for_old_checkpoint_compatibility():
+    old_style = VideoSSL()
+    new_logits = VideoSSL(bspline=True, bspline_space="logits", latent_dim=16)
+    new_latent = VideoSSL(bspline=True, bspline_space="latent")
+    assert "latent_basis" not in old_style.state_dict()
+    assert "latent_basis" in new_logits.state_dict()
+    assert "latent_basis" in new_latent.state_dict()

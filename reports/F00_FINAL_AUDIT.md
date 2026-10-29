@@ -1,10 +1,13 @@
 # F00 — Final reproducibility audit and project report
 
-> **2026-10-29 recheck in progress:** This snapshot predates E08/E09 and the
-> paired seed-1 controls. Its A/C causal verdicts and Bézier task scores are
-> superseded by `reports/E09_LIMITATION_RECHECK.md`, the corrected E05 matrix,
-> and the forthcoming E08 transfer report. The commands in section 6 were
-> corrected to match actual R00/R01 manifests.
+> **Historical snapshot, not the current final verdict.** This document
+> predates E08–E12 and paired seed-1 controls. Its A/C causal verdicts,
+> Bézier task scores, VAOT port status, and “no curve winner” statement are
+> superseded by `reports/E08_RHO0_TRANSFER.md`,
+> `reports/E09_LIMITATION_RECHECK.md`, `reports/E10_CURVE_SPACE_COMPARISON.md`,
+> `reports/E11_RHO_SPLIT.md`, `reports/E12_FS_MID_TRANSFER.md`, and the corrected E05 matrix. See the live
+> ledger in `IMPLEMENTATION.md` for current run states; do not cite the
+> body below as the final project conclusion.
 
 **Date:** 2026-10-29
 **Branch:** `main` (uncommitted work: `V00 PROVENANCE.md`, `collect_e_results.py`,

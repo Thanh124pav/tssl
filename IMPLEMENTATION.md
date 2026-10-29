@@ -535,10 +535,13 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | E07c | DONE | reports/E07bc_PRIOR_ABLATION.md | radius_gw ablation — 0.12 FAIL (−2.85 pp), 0.50 FAIL (−15.20 pp) |
 | E08 | DONE | reports/E08_RHO0_TRANSFER.md, E08a/b runs (12) + R02 (6) | rho=0 does NOT transfer: DA Δ=−3.23 pp, YTI mean Δ=−4.17 pp. FSeval gain is dataset-specific. |
 | E09 | DONE | reports/E09_LIMITATION_RECHECK.md, scripts/eval_{boundary,rho_swap,transport_support}.py | Transport-support probes: T_xy is NOT peaky (support 30.87/256). ε control shows T_xy collapses with higher ε. Boundary F1 adds direct B metric. |
-| E11 | DONE | reports/E09 §rho split (also run_e11_rho_split.sh) | **seg0 +9.49 pp PASS, align0 +0.97 pp**. FSeval gain from rho=0 comes entirely from segmentation prior, not alignment. |
+| E11 | DONE | reports/E11_RHO_SPLIT.md (also run_e11_rho_split.sh) | **seg0 +9.49 pp PASS, align0 +0.97 pp** on 2 FSeval seeds. Gain is dominated by segmentation prior; alignment-only does not pass gate. Seed-2 confirmation in E11c. |
 | V02 | DONE | reports/V02_VAOT_PL2_PORT.md | PL 2.x port; all VAOT modules import cleanly |
-| E10a | PENDING | reproductions/tssl/scripts/run_e10a_bspline_logits.sh | B-spline in logits-space (action-space), 2 blend × 2 seed on FSeval |
-| E10b | PENDING | | B-spline in dedicated latent space (new projection head) — design + implementation |
+| E10a | DONE | reports/E10_CURVE_SPACE_COMPARISON.md, run_e10a_bspline_logits.sh | Logits-space B-spline: blend 0.3 −1.11 pp; blend 1.0 −6.21 pp on 2 FSeval seeds; fail gate. |
+| E10b | DONE | reports/E10_CURVE_SPACE_COMPARISON.md, run_e10b_bspline_latent.sh | Latent 12-D/blend 0.3 passes 2-seed screening (+2.36 pp); other settings fail. |
+| E10c | DONE | reports/E10_CURVE_SPACE_COMPARISON.md, run_e10c_seed2_validation.sh | Seed-2 winner −5.23 pp vs paired baseline; 3-seed mean −0.17 pp and E00 no-collapse gate fails. Scale SKIP. |
+| E11c | DONE | reports/E11_RHO_SPLIT.md, run_e11_seed2_validation.sh | Segmentation-only rho=0 gains +7.08 pp on seed 2; 3-seed paired mean +8.69 pp. Advances to FS Mid. |
+| E12 | DONE | reports/E12_FS_MID_TRANSFER.md, run_e12_fs_mid_rho_seg0.sh | FS Mid paired seeds: segmentation-only rho=0 gives +0.18 pp mean MoF, mIoU −1.06 pp. Fails gate; DA/YTI scale SKIP. |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án

@@ -35,7 +35,7 @@ class VideoSSL(pl.LightningModule):
                  arc_reparam=False, arc_warmup_epochs=5,
                  bspline=False, bspline_tol=0.05, bspline_kmax=0, bspline_warmup_epochs=5,
                  bspline_space='X', bspline_blend_max=1.0, bspline_blend_rampup=0,
-                 latent_dim=16,
+                 latent_dim=None,
                  gauss_smooth=False, gauss_sigma=2.0, gauss_blend_max=1.0, gauss_warmup_epochs=5,
                  bezier=False, bezier_nseg=4, bezier_tol=0.05, bezier_maxseg=32,
                  bezier_warmup_epochs=5, bezier_space='X', bezier_blend_max=1.0, bezier_blend_rampup=0):
@@ -76,7 +76,7 @@ class VideoSSL(pl.LightningModule):
         self.bspline_kmax = bspline_kmax if bspline_kmax > 0 else None
         self.bspline_warmup_epochs = bspline_warmup_epochs
         self.bspline_space = bspline_space   # 'X' (frame embedding), 'logits' (action-space via clusters), or 'latent' (dedicated learnable bottleneck)
-        self.latent_dim = latent_dim
+        self.latent_dim = 16 if latent_dim is None else latent_dim
         self.bspline_blend_max = bspline_blend_max
         self.bspline_blend_rampup = bspline_blend_rampup
         self.gauss_smooth = gauss_smooth
@@ -104,10 +104,14 @@ class VideoSSL(pl.LightningModule):
         # Dedicated learnable latent basis for bspline_space='latent' (E10b).
         # Shape (latent_dim, d), unit-norm rows at init.  Trains through the
         # downstream CE loss just like `clusters` does.
-        self.latent_basis = nn.parameter.Parameter(
-            data=F.normalize(torch.randn(self.latent_dim, d), dim=-1),
-            requires_grad=True,
-        )
+        # Older checkpoints have no latent_basis. New E10a/E10b checkpoints
+        # record latent_dim in hyperparameters and must retain the parameter
+        # even when their smoothing space is not 'latent'.
+        if latent_dim is not None or bspline_space == 'latent':
+            self.latent_basis = nn.parameter.Parameter(
+                data=F.normalize(torch.randn(self.latent_dim, d), dim=-1),
+                requires_grad=True,
+            )
 
         #TODO: Need to replace with evaluation metrics for video alignment
         self.activity = activity
@@ -217,7 +221,8 @@ class VideoSSL(pl.LightningModule):
         with torch.no_grad():
             self.clusters.data = F.normalize(self.clusters.data, dim=-1)
             # Keep latent_basis rows unit-norm (parallels the clusters normalization).
-            self.latent_basis.data = F.normalize(self.latent_basis.data, dim=-1)
+            if hasattr(self, 'latent_basis'):
+                self.latent_basis.data = F.normalize(self.latent_basis.data, dim=-1)
 
         ##FIND SEGMENTATION LOSS FOR X
         codes_segmentation_X = torch.exp(features_X @ self.clusters.T[None, ...] / self.temp)
@@ -625,8 +630,8 @@ if __name__ == '__main__':
     parser.add_argument('--bspline-warmup-epochs', type=int, default=5, help='epochs of identity before bspline kicks in')
     parser.add_argument('--bspline-space', type=str, default='X', choices=['X', 'logits', 'latent'],
                         help="fit B-spline on 'X' (frame embedding), 'logits' (action-space via clusters), or 'latent' (E10b: dedicated learnable bottleneck)")
-    parser.add_argument('--latent-dim', type=int, default=16,
-                        help="E10b: dim of dedicated learnable latent basis when --bspline-space=latent")
+    parser.add_argument('--latent-dim', type=int, default=None,
+                        help="E10b: dim of dedicated learnable latent basis when --bspline-space=latent (default: 16)")
     parser.add_argument('--bspline-blend-max', type=float, default=1.0, help='residual blend coefficient at max (0=off, 1=full)')
     parser.add_argument('--bspline-blend-rampup', type=int, default=0, help='epochs over which blend ramps from 0 to blend-max')
     parser.add_argument('--gauss-smooth', action='store_true', help='E2d: Gaussian smoothing along time axis')
