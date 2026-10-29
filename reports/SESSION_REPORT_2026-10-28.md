@@ -120,27 +120,47 @@ From 2026-10-27 session with paper Table 5 hyperparameters:
 - Integrated into `train.py` with `--bezier` CLI flag (same interface as `--bspline`)
 - All 8/8 tests pass
 
-### GPU Pipeline Running (E01/E03/E04 experiments on FSeval):
-Currently executing sequentially on GPU:
-1. E01_bspline_FSeval_s0 (running)
-2. E01_bspline_FSeval_s1
-3. E03_gauss_s2_FSeval_s0
-4. E03_gauss_s2_FSeval_s1
-5. E04_bezier_FSeval_s0
-6. E04_bezier_FSeval_s1
-7. E00_baseline_FSeval_s1 (paired seed 1 baseline for comparison)
+### E01 B-spline Result: NEGATIVE (smoothing hurts)
+- E01_s0: MoF=0.3383 F1=0.3934 mIoU=0.2058 — **Δ MoF = -11.27 pp vs baseline**
+- Diagnostics show: T_entropy 0.055→0.119 (softer transport, good for hypothesis A)
+  but boundary_z 0.047→-0.024 (worse at boundaries) and task metrics collapse
+- **Key finding:** Making T* less peaky through representation smoothing doesn't help.
+  Hypothesis A (peaky T*) appears to be a symptom, not the root cause.
+
+### E01 B-spline s1 Result: NEGATIVE
+- E01_s1: MoF=0.3681 F1=0.4043 mIoU=0.2141 — **Δ MoF = -12.64 pp vs baseline s1**
+- B-spline mean over 2 seeds: MoF=0.3532 (Δ = -11.95pp) — DECISIVELY FAIL
+
+### E03 Gaussian Result: NEGATIVE (also hurts)
+- E03_s0: MoF=0.3465 F1=0.3967 mIoU=0.2092 — **Δ MoF = -10.45 pp vs baseline**
+- E03_s1: MoF=0.3880 F1=0.4148 mIoU=0.2368 — **Δ MoF = -10.65 pp vs baseline s1**
+- Gaussian mean over 2 seeds: MoF=0.3673 (Δ ~ -8.5pp vs baseline s0)
+- Slightly better than B-spline but still far below baseline
+
+### GPU Pipeline Status:
+- E01_s0 ✅ E01_s1 ✅ E03_s0 ✅ E03_s1 ✅ — all negative
+- E04_bezier_s0 — RUNNING
+- E04_bezier_s1, E00_baseline_s1 — QUEUED
+
+### V00: VAOT Import — DONE ✅
+- Clean import of VAOT source (no nested .git)
+- Provenance: upstream daec4a6 from github.com/trquhuytin/VAOT-ICCV25
+- Import test: 4/6 modules pass, train.py/evaluations.py need PL 2.x porting
+- Installed easydict, natsort in acvcl env
+- Pouring data found (11 train, 10 test videos) — flat structure needs reorganization
+- Penn Action, IKEA ASM, npyrecords not found
 
 ## 6. Next Steps
 
-1. **E-pipeline completion:** ~7 runs × ~3 min each = ~21 min remaining
-2. **E05:** Aggregate E-phase results into comparison matrix (baseline vs B-spline vs Gaussian vs Bézier)
-3. **Diagnostics on E checkpoints:** Run diagnose.py on winning variants
-4. **Scale gate:** If any variant improves ≥1pp mean over 2 seeds, scale to FS Mid / DA / YTI
+1. **E-pipeline completion:** 3 more runs (E04×2, E00_baseline_s1)
+2. **E05:** Aggregate comparison matrix once all done
+3. **Scale gate decision:** All variants so far are negative; Bézier is the last hope
+4. **V01:** Audit VAOT data, create npyrecords, PL 2.x porting
 
 ---
 
-## 6. Compute Usage
+## 7. Compute Usage
 
-- GPU time: ~35 min for DA (30 epochs) + ~35 min for 5 YTI activities (30 epochs each)
-- Peak VRAM: ~838 MiB (model is tiny: 14.2K params)
-- No idle GPU waste — sequential execution within single Slurm job
+- GPU time: ~35 min for DA + ~35 min for 5 YTI + E-pipeline (~45 min total)
+- Peak VRAM: ~1343 MiB (Bézier uses slightly more than baseline)
+- No idle GPU waste — sequential pipeline with continuous utilization

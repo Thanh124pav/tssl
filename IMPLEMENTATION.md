@@ -248,7 +248,7 @@ reproductions/tssl/
 
 ### Phase D — Diagnose limitation hypotheses
 
-#### [ ] D00 — Diagnostic schema và golden tests
+#### [x] D00 — Diagnostic schema và golden tests
 
 **Mục tiêu:** instrumentation không làm thay đổi training semantics.
 
@@ -261,7 +261,7 @@ reproductions/tssl/
 
 **Exit criterion:** một tiny run xuất schema versioned và reproduce cùng loss khi diagnostics off/on.
 
-#### [ ] D01 — Hypothesis A: T* peaky và supervision nghèo
+#### [x] D01 — Hypothesis A: T* peaky và supervision nghèo
 
 **Hypothesis:** FGW với entropy và diagonal priors tạo transport peaky; stop-gradient CE gần top-1 positive supervision, ít negative/repulsive signal.
 
@@ -276,7 +276,7 @@ reproductions/tssl/
 
 **Exit criterion:** kết luận support/refute/conditional với effect size, không chỉ heatmap đẹp.
 
-#### [ ] D02 — Hypothesis B: tautological intra-video loss và boundary blindness
+#### [x] D02 — Hypothesis B: tautological intra-video loss và boundary blindness
 
 **Hypothesis:** target segmentation được sinh từ cùng cost đang tối ưu; model học clustering frame-level nhưng không học transition sharpness.
 
@@ -292,7 +292,7 @@ GT chỉ dùng cho diagnosis/evaluation, không được vô tình đi vào trai
 
 **Exit criterion:** chỉ ra loss giảm có hay không tương quan với boundary quality và failure mode cụ thể.
 
-#### [ ] D03 — Hypothesis C: frame index là prior bất lợi
+#### [x] D03 — Hypothesis C: frame index là prior bất lợi
 
 **Hypothesis:** khoảng cách index sau uniform sampling không đại diện semantic/time distance, nhất là action duration không đều.
 
@@ -306,7 +306,7 @@ GT chỉ dùng cho diagnosis/evaluation, không được vô tình đi vào trai
 
 **Exit criterion:** effect theo duration/boundary và ít nhất một controlled prior ablation.
 
-#### [ ] D04 — Aggregate diagnosis report
+#### [x] D04 — Aggregate diagnosis report
 
 **Mục tiêu:** tổng hợp A/B/C trước khi gán cơ chế cho smoothing.
 
@@ -316,7 +316,7 @@ GT chỉ dùng cho diagnosis/evaluation, không được vô tình đi vào trai
 
 ### Phase V — VAOT reproduction độc lập
 
-#### [ ] V00 — Import VAOT source và pin environment
+#### [x] V00 — Import VAOT source và pin environment
 
 **Mục tiêu:** đưa VAOT vào repo mà không mang nested `.git` và không làm hỏng VASOT env.
 
@@ -514,12 +514,12 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | R00 | DONE | R00_DA_baseline_s0, wandb ge8a3wu7 | MoF=0.5986 F1=0.6380 mIoU=0.4211, canonical with provenance |
 | R01 | DONE | R01_YTI_*_s0, wandb tihe3mu9/6jaj64ev/5cg9rker/+ | Mean: MoF=0.4793 F1=0.3493 mIoU=0.2259. All 5 match old runs exactly |
 | R02 | CONDITIONAL | | Chỉ chạy khi gate kích hoạt |
-| D00 | TODO | | |
-| D01 | PARTIAL | | Entropy evidence sơ bộ |
-| D02 | PARTIAL | | Boundary evidence sơ bộ |
-| D03 | PARTIAL | | Index/semantic corr sơ bộ |
-| D04 | TODO | | |
-| V00 | TODO | | Source còn ở old nested repo |
+| D00 | DONE | diagnose.py + 13 dataset runs | Schema versioned, diagnostics don't alter training |
+| D01 | DONE | 13 datasets + E01 comparison | A: SUPPORTED — T_ent 0.024-0.119, but softening via B-spline hurts |
+| D02 | DONE | 13 datasets | B: PARTIAL — boundary_z mean 0.145, negative for Breakfast |
+| D03 | DONE | 13 datasets | C: SUPPORTED — idx_sem_corr 0.063-0.516, weakest on YTI |
+| D04 | DONE | reports/D04_DIAGNOSIS_AGGREGATE.md | Full aggregate report with hypothesis verdicts |
+| V00 | DONE | VAOT/PROVENANCE.md | Clean import, provenance, import test. PL 2.x porting needed (train.py, evaluations.py). Pouring data found but flat structure. Penn/IKEA/npyrecords missing. |
 | V01 | TODO | | Data/npyrecords chưa audit hoàn chỉnh |
 | V02 | TODO | | |
 | V03 | TODO | | |
