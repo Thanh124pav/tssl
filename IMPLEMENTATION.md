@@ -439,6 +439,70 @@ GT chỉ dùng cho diagnosis/evaluation, không được vô tình đi vào trai
 
 **Exit criterion:** curve effect được so với direct intervention lên hypothesis tương ứng.
 
+#### [ ] E13 — Action bridge giữa segmentation và alignment
+
+**Mục tiêu:** biến action space thành cầu nối hai chiều, thay vì hai task chỉ
+chia sẻ encoder. Action posterior của mỗi frame bổ sung một cost cho
+frame-to-frame alignment; transport alignment đồng thời giám sát action
+posterior qua một auxiliary loss nhỏ.
+
+**Ablation bắt buộc:** action-cost only và bidirectional action bridge. Không
+dùng spline trong packet này để tách gain của action bridge khỏi smoothing.
+
+**Đo:** MoF/F1/mIoU, boundary F1, transport support, action-consistency của
+alignment. Không gọi proxy action-consistency là paper alignment metric.
+
+**Exit criterion:** paired seeds 0/1 trên FSeval, checkpoint finite, effect
+từng seed và quyết định stop/scale theo E00.
+
+#### [ ] E14 — B-spline fit-quality và hyperparameter sensitivity
+
+**Mục tiêu:** phân biệt “curve fit không đạt” với “curve fit tốt nhưng
+representation/task metric kém”.
+
+**Diagnostics bắt buộc:** reconstruction RMSE/max error theo frame, số control
+points/knots, tỷ lệ chạm `k_max`, knot density quanh GT/predicted boundaries,
+curvature, boundary-vs-interior error và runtime. Sweep có kiểm soát `tol`,
+`k_max`, degree và blend; mỗi lần chỉ đổi một trục.
+
+**Quy tắc kết luận:** chỉ gọi một cấu hình B-spline là downstream failure nếu
+fit diagnostics đạt ngưỡng pre-register và checkpoint finite. Fit failure,
+numerical failure và downstream failure phải ghi riêng.
+
+**Exit criterion:** sensitivity surface nhỏ trên checkpoint/batches cố định,
+sau đó tối đa hai cấu hình hợp lệ được train paired seeds.
+
+#### [ ] E15 — Boundary-aware action-space B-spline
+
+**Mục tiêu:** smooth action trajectory trong action interior nhưng giữ nguyên
+hoặc giảm blend ở transition. Boundary gate phải self-supervised ở train;
+GT chỉ dùng diagnostic/evaluation.
+
+**Controls:** global action-space spline, boundary gate không spline, và
+boundary-aware spline. So với E13 action bridge không spline.
+
+**Exit criterion:** paired FSeval table gồm task metrics, direct boundary F1,
+boundary count ratio và fit-quality diagnostics E14.
+
+#### [ ] E16 — Segment-wise temporal scaling augmentation
+
+**Mục tiêu:** sau khi có soft segmentation/alignment đủ ổn định, co giãn thời
+gian từng segment/soft segment và buộc frame representation bất biến với tốc
+độ thực hiện, trong khi bảo toàn thứ tự và boundary.
+
+**Thiết kế tối thiểu:** sample monotone piecewise warp quanh các segment,
+re-sample representation bằng curve, consistency giữa original/warped action
+posterior và alignment transport. Không dùng GT boundaries khi train.
+
+**Controls:** global speed warp, segment-wise hard warp, segment-wise soft
+warp; report warp range và tỷ lệ frame đi qua boundary.
+
+**Gate:** chỉ chạy sau E13–E15 hoặc khi pseudo-boundary reliability đạt ngưỡng
+pre-register; nếu boundary nhiễu, temporal scaling sẽ khuếch đại label noise.
+
+**Exit criterion:** paired task/boundary/alignment-proxy metrics và kiểm tra
+không collapse dưới warp mạnh.
+
 ### Phase F — Finalize
 
 #### [ ] F00 — Reproducibility audit và final report
@@ -542,6 +606,11 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | E10c | DONE | reports/E10_CURVE_SPACE_COMPARISON.md, run_e10c_seed2_validation.sh | Seed-2 winner −5.23 pp vs paired baseline; 3-seed mean −0.17 pp and E00 no-collapse gate fails. Scale SKIP. |
 | E11c | DONE | reports/E11_RHO_SPLIT.md, run_e11_seed2_validation.sh | Segmentation-only rho=0 gains +7.08 pp on seed 2; 3-seed paired mean +8.69 pp. Advances to FS Mid. |
 | E12 | DONE | reports/E12_FS_MID_TRANSFER.md, run_e12_fs_mid_rho_seg0.sh | FS Mid paired seeds: segmentation-only rho=0 gives +0.18 pp mean MoF, mIoU −1.06 pp. Fails gate; DA/YTI scale SKIP. |
+| E13 | DONE | reports/E13_ACTION_BRIDGE_RESULTS.md, 4 E13 runs | Cost-only −1.27 pp MoF; bidirectional +0.11 pp and alignment action-agreement proxy +0.88 pp. Mechanically active, fails task gate. |
+| E14 | DONE | reports/E14_BSPLINE_FIT_RESULTS.md, 29 fixed-checkpoint audits | All global fits with kmax<256 fail fit gate; kmax≈N is near-identity. Prior curve negatives reclassified as underfit smoothing outcomes. |
+| E15a | DONE | reports/E15_BOUNDARY_AWARE_FIT_RESULTS.md, 12 fit audits | Piecewise/repeated-knot-equivalent ceiling fails fit gate even with GT boundaries; ASOT under-segments, posterior changes over-segment. Training stopped. |
+| E15b | PENDING | smoothing-spline/Pareto fitter | Replace exact max-error objective with held-out reconstruction vs roughness/capacity selection; linear interpolation control required. |
+| E16 | PENDING | | Segment-wise temporal scaling augmentation, gated by reliable pseudo-boundaries. |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án

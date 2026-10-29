@@ -20,6 +20,7 @@ from scipy.spatial.distance import pdist, squareform
 from video_dataset import VideoDataset
 import alignment_ot
 import segmentation_ot
+from action_bridge import action_alignment_ce, action_similarity
 from utils import *
 from metrics import ClusteringMetrics, indep_eval_metrics
 
@@ -32,6 +33,8 @@ class VideoSSL(pl.LightningModule):
                  lambda_frames_train=0.05, lambda_actions_train=0.05, lambda_frames_eval=0.05, lambda_actions_eval=0.01,
                  temp=0.1, radius_gw=0.04,learn_clusters=True, n_frames=256, rho=0.1, beta=1, exclude_cls=None, visualize=False, activity=None,
                  rho_seg=None, rho_align=None,
+                 action_bridge_cost_weight=0.0, action_bridge_loss_weight=0.0,
+                 action_bridge_temp=0.1, action_bridge_warmup_epochs=5,
                  arc_reparam=False, arc_warmup_epochs=5,
                  bspline=False, bspline_tol=0.05, bspline_kmax=0, bspline_warmup_epochs=5,
                  bspline_space='X', bspline_blend_max=1.0, bspline_blend_rampup=0,
@@ -68,6 +71,10 @@ class VideoSSL(pl.LightningModule):
         self.rho = rho
         self.rho_seg = rho if rho_seg is None else rho_seg
         self.rho_align = rho if rho_align is None else rho_align
+        self.action_bridge_cost_weight = action_bridge_cost_weight
+        self.action_bridge_loss_weight = action_bridge_loss_weight
+        self.action_bridge_temp = action_bridge_temp
+        self.action_bridge_warmup_epochs = action_bridge_warmup_epochs
         self.beta = beta
         self.arc_reparam = arc_reparam
         self.arc_warmup_epochs = arc_warmup_epochs
@@ -291,6 +298,14 @@ class VideoSSL(pl.LightningModule):
             temp_prior = alignment_ot.temporal_prior(T_X, T_Y, self.rho_align, features_X.device)
             # Cost Matrix Ck from section 4.2, no need to divide by norms since both vectors were previously normalized with F.normalize()
             cost_matrix = 1. - features_X @ features_Y.transpose(1, 2)
+            bridge_active = self.current_epoch >= self.action_bridge_warmup_epochs
+            if bridge_active and self.action_bridge_cost_weight > 0:
+                # Segmentation -> alignment: frames with similar action
+                # posteriors receive a lower alignment ground cost. This path
+                # is deliberately detached together with the OT pseudo-label.
+                cost_matrix += self.action_bridge_cost_weight * (
+                    1.0 - action_similarity(codes_segmentation_X, codes_segmentation_Y)
+                )
             # Ĉk = Ck + ρR
             cost_matrix += temp_prior
 
@@ -320,10 +335,24 @@ class VideoSSL(pl.LightningModule):
             dim=2).mean()
         self.log('train_loss_alignment', loss_ce_alignment)
 
+        loss_action_bridge = features_X.new_zeros(())
+        if bridge_active and self.action_bridge_loss_weight > 0:
+            # Alignment -> action space: the detached frame transport teaches
+            # the differentiable action posteriors to agree across videos.
+            loss_action_bridge = action_alignment_ce(
+                opt_codes, codes_segmentation_X, codes_segmentation_Y,
+                mask_X, mask_Y, temperature=self.action_bridge_temp,
+            )
+        self.log('train_loss_action_bridge', loss_action_bridge)
+
         # Weighted sum of the segmentation and alignment losses
         # total_loss_ce = (self.beta * loss_ce_segmentation) + loss_ce_alignment
         # print(abc)
-        total_loss_ce = loss_ce_segmentation + (self.beta * loss_ce_alignment)
+        total_loss_ce = (
+            loss_ce_segmentation
+            + (self.beta * loss_ce_alignment)
+            + (self.action_bridge_loss_weight * loss_action_bridge)
+        )
         self.log('train_loss', total_loss_ce)
 
         return total_loss_ce
@@ -607,6 +636,14 @@ if __name__ == '__main__':
                         help='Override temporal prior weight for segmentation (default: --rho)')
     parser.add_argument('--rho-align', type=float, default=None,
                         help='Override temporal prior weight for alignment (default: --rho)')
+    parser.add_argument('--action-bridge-cost-weight', type=float, default=0.0,
+                        help='Weight of action-posterior distance added to alignment OT cost')
+    parser.add_argument('--action-bridge-loss-weight', type=float, default=0.0,
+                        help='Weight of alignment-to-action auxiliary CE (0 = target-cost-only bridge)')
+    parser.add_argument('--action-bridge-temp', type=float, default=0.1,
+                        help='Temperature for action-induced frame alignment probabilities')
+    parser.add_argument('--action-bridge-warmup-epochs', type=int, default=5,
+                        help='Epochs before enabling action bridge cost/loss')
     parser.add_argument('--n-clusters', '-c', type=int, default=8, help='number of actions/clusters')
     parser.add_argument('--beta', '-b', type=float, default=1,
                         help='the weight used when combining alignment and segmentation losses')
@@ -683,6 +720,10 @@ if __name__ == '__main__':
                        lambda_actions_train=args.lambda_actions_train, lambda_actions_eval=args.lambda_actions_eval, step_size=args.step_size,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
                        n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
+                       action_bridge_cost_weight=args.action_bridge_cost_weight,
+                       action_bridge_loss_weight=args.action_bridge_loss_weight,
+                       action_bridge_temp=args.action_bridge_temp,
+                       action_bridge_warmup_epochs=args.action_bridge_warmup_epochs,
                        arc_reparam=args.arc_reparam, arc_warmup_epochs=args.arc_warmup_epochs,
                        bspline=args.bspline, bspline_tol=args.bspline_tol, bspline_kmax=args.bspline_kmax, bspline_warmup_epochs=args.bspline_warmup_epochs,
                        bspline_space=args.bspline_space, bspline_blend_max=args.bspline_blend_max, bspline_blend_rampup=args.bspline_blend_rampup,
