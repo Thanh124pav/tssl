@@ -532,6 +532,9 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | E05 | DONE | reports/E05_COMPARISON_MATRIX.md | All variants fail scale gate; E06 skipped |
 | E06 | SKIP | | Gate not passed on FSeval; scaling to DA/YTI unjustified |
 | E07a | DONE | reports/E07a_EPS_ABLATION.md | 4 runs on FSeval; ε↑ monotonically harms (−14.9 pp, −25.9 pp) — A refuted as actionable |
+| E07b | DONE | reports/E07bc_PRIOR_ABLATION.md | rho ablation — **rho=0 +7.95 pp, rho=0.05 +4.10 pp**; both PASS gate; first positive result in project |
+| E07c | DONE | reports/E07bc_PRIOR_ABLATION.md | radius_gw ablation — 0.12 FAIL (−2.85 pp), 0.50 FAIL (−15.20 pp); C^x is not the lever |
+| V02 | DONE | reports/V02_VAOT_PL2_PORT.md | PL 2.x port; all VAOT modules import cleanly |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án

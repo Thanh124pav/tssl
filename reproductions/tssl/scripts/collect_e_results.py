@@ -87,16 +87,29 @@ def main():
             seed = 1
 
         # Extract variant
-        if "baseline" in run_id.lower():
+        rid_l = run_id.lower()
+        if "baseline" in rid_l:
             variant = "baseline"
-        elif "bspline" in run_id.lower():
+        elif "bspline" in rid_l:
             variant = "bspline"
-        elif "gauss" in run_id.lower():
+        elif "gauss" in rid_l:
             variant = "gaussian"
-        elif "bezier" in run_id.lower():
+        elif "bezier" in rid_l:
             variant = "bezier"
-        elif "arc" in run_id.lower():
+        elif "arc" in rid_l:
             variant = "arc"
+        elif "e07a_eps0p15" in rid_l:
+            variant = "eps0p15"
+        elif "e07a_eps0p30" in rid_l:
+            variant = "eps0p30"
+        elif "e07b_rho0p05" in rid_l:
+            variant = "rho0p05"
+        elif "e07b_rho0p0_" in rid_l:
+            variant = "rho0p0"
+        elif "e07c_r0p12" in rid_l:
+            variant = "r0p12"
+        elif "e07c_r0p50" in rid_l:
+            variant = "r0p50"
         else:
             variant = "other"
 
@@ -123,7 +136,12 @@ def main():
     baseline_f1 = 0
     baseline_miou = 0
 
-    for variant in ["baseline", "arc", "bspline", "gaussian", "bezier"]:
+    all_variants = [
+        "baseline", "arc", "bspline", "gaussian", "bezier",
+        "eps0p15", "eps0p30",
+        "rho0p05", "rho0p0", "r0p12", "r0p50",
+    ]
+    for variant in all_variants:
         if variant not in variants:
             continue
         runs = variants[variant]
@@ -149,8 +167,8 @@ def main():
     print("\n" + "=" * 100)
     print("SCALE GATE CHECK (need ≥1pp improvement over baseline mean)")
     print("=" * 100)
-    for variant in ["arc", "bspline", "gaussian", "bezier"]:
-        if variant not in variants:
+    for variant in all_variants:
+        if variant == "baseline" or variant not in variants:
             continue
         runs = variants[variant]
         n = len(runs)
@@ -158,7 +176,7 @@ def main():
         d_mof = (mean_mof - baseline_mof) * 100
         passed = d_mof >= 1.0
         status = "PASS" if passed else "FAIL"
-        print(f"  {variant:15s}: Δ MoF = {d_mof:+.2f} pp → {status}")
+        print(f"  {variant:15s} (n={n}): Δ MoF = {d_mof:+.2f} pp → {status}")
 
 
 if __name__ == "__main__":

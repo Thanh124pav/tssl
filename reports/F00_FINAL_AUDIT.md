@@ -105,9 +105,9 @@ counter-check for Hypothesis A.
 
 | Hypothesis | D-phase verdict | Direct intervention | Final reading |
 |---|---|---|---|
-| A — T* is peaky, supervision near top-1 | SUPPORTED (D01: T_ent 0.024–0.077, exp(H)≈1) | E07a: ε ↑ monotonically harms MoF/mIoU; E01/E03/E04: softening at representation level also harms | **Peaky T\* is observed but is a working-mode, not a lever.** Hypothesis A as described in the project brief is correctly diagnosed; as an actionable cause of VASOT's limitations it is **refuted** by the controlled interventions. |
-| B — tautological intra-video CE, boundary blindness | PARTIAL (D02: boundary z=+0.145 mean, negative on Breakfast) | Not yet run as a direct intervention | **Open.** The transport-plan boundary z-score is a proxy, not a boundary P/R/F1. The direct test (boundary-aware auxiliary head) is specified in E07a §Follow-ups but was not executed this session. |
-| C — frame-index prior | SUPPORTED (D03: idx_sem_corr 0.063–0.516, weakest on YTI 0.063–0.202) | Not yet run as a direct intervention | **Most plausible remaining root cause.** D03 ruled this in; no direct ablation of `R` or `C^x` has yet been run. E07a reweights toward C by eliminating A. |
+| A — T* is peaky, supervision near top-1 | SUPPORTED (D01: T_ent 0.024–0.077, exp(H)≈1) | E07a: ε ↑ monotonically harms MoF/mIoU; E01/E03/E04: softening at representation level also harms | **Peaky T\* is observed but is a working-mode, not a lever.** Correctly diagnosed; as an actionable cause of VASOT's limitations it is **refuted** by the controlled interventions. |
+| B — tautological intra-video CE, boundary blindness | PARTIAL (D02: boundary z=+0.145 mean, negative on Breakfast) | Not yet run as a direct intervention | **Open.** The transport-plan boundary z-score is a proxy, not a boundary P/R/F1. The direct test (boundary-aware auxiliary head) is specified in E07bc §Follow-ups. |
+| C — frame-index prior | SUPPORTED (D03: idx_sem_corr 0.063–0.516, weakest on YTI 0.063–0.202) | E07b: **rho=0 improves MoF by +7.95 pp on FSeval, both seeds**; rho=0.05 also PASSES (+4.10 pp). E07c: radius_gw widening FAILS. | **CONFIRMED actionable, via the temporal prior `R`.** The structural prior `C^x` is a different mechanism (not improvable by widening). First variant in the project to pass the scale gate. |
 
 Full diagnostic numbers: `reports/D04_DIAGNOSIS_AGGREGATE.md`.
 ε direct intervention: `reports/E07a_EPS_ABLATION.md`.
@@ -122,26 +122,31 @@ roughly neutral in expectation (−0.78 pp) with a bad per-seed variance
 
 | Variant | Mean MoF | Δ MoF (pp) | Mean mIoU | Scale gate |
 |---|---:|---:|---:|---|
-| Baseline (eps=0.07) | 0.4727 | — | 0.2697 | — |
+| Baseline (rho=0.15, eps=0.07, radius=0.04) | 0.4727 | — | 0.2697 | — |
 | Arc-length | 0.4649 | −0.78 | — | FAIL |
 | B-spline (E01) | 0.3532 | −11.95 | 0.2100 | FAIL |
 | Gaussian σ=2 (E03) | 0.3673 | −10.55 | 0.2230 | FAIL |
 | Bézier 4-seg (E04) | 0.3538 | −11.89 | 0.0295 | FAIL (mIoU collapse) |
 | ε=0.15 (E07a — not a curve) | 0.3237 | −14.90 | 0.0330 | FAIL |
 | ε=0.30 (E07a — not a curve) | 0.2140 | −25.87 | 0.0608 | FAIL |
+| **rho=0.05 (E07b)** | **0.5138** | **+4.10** | 0.3025 | **PASS** |
+| **rho=0.00 (E07b)** | **0.5522** | **+7.95** | 0.3116 | **PASS** |
+| radius_gw=0.12 (E07c) | 0.4442 | −2.85 | 0.1831 | FAIL |
+| radius_gw=0.50 (E07c) | 0.3207 | −15.20 | 0.2040 | FAIL |
 
-Full matrix: `reports/E05_COMPARISON_MATRIX.md` (curves) and
-`reports/E07a_EPS_ABLATION.md` (ε knob — the direct lever on the same
-mechanism curves tried to address indirectly).
+Full matrix: `reports/E05_COMPARISON_MATRIX.md` (curves),
+`reports/E07a_EPS_ABLATION.md` (ε knob),
+`reports/E07bc_PRIOR_ABLATION.md` (rho / radius_gw).
 
-**Conclusion:** the project's working proposal "smoothen discrete
+**Conclusion:** the project's original working proposal — "smoothen discrete
 representations via B-spline / Bézier / Gaussian curves to fix VASOT's
-limitations" is **refuted** on FSeval. The curves do mechanically reduce
-T\*'s peakiness (B-spline raises normalised row entropy from 0.055 to 0.119,
-exactly as predicted), but the downstream segmentation gets worse, not better,
-and the ε ablation shows the same monotonic effect without any representation
-change. The right lever is almost certainly Hypothesis C (the frame-index
-prior); nothing in this project has yet directly intervened there.
+limitations" — is **refuted** on FSeval. The right lever is Hypothesis C,
+specifically the temporal prior `R` controlled by `rho`. Setting `rho = 0`
+(removing R entirely) improves FSeval MoF by +7.95 pp on both seeds, the
+first and only variant in the project to pass the scale gate. Widening the
+companion structural prior `C^x` via `radius_gw` fails, so Hypothesis C
+should be sharpened to "the *temporal* frame-index prior is harmful",
+distinct from the structural diagonal prior which is load-bearing.
 
 ## 6. Minimal reproducibility recipes
 
