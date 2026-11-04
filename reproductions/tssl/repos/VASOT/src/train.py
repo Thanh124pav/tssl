@@ -74,7 +74,8 @@ class VideoSSL(pl.LightningModule):
                  rho_seg=None, rho_align=None, fix_virtual_column=False,
                  input_window=0,
                  template_slots=0, template_rho=None, template_warmup_epochs=5,
-                 template_eps=None, template_blend=1.0,
+                 template_eps=None, template_blend=1.0, template_soft=False,
+                 template_frozen=False,
                  ray_geometry=False, ray_mode='sphere', ray_videos=3,
                  ray_weight=0.1, ray_radius_weight=1.0, ray_group_weight=0.1,
                  ray_shell_cost_weight=0.0, ray_warmup_epochs=10, ray_window=15,
@@ -180,6 +181,8 @@ class VideoSSL(pl.LightningModule):
         self.template_warmup_epochs = int(template_warmup_epochs)
         self.template_eps = template_eps
         self.template_blend = float(template_blend)
+        self.template_soft = bool(template_soft)
+        self.template_frozen = bool(template_frozen)
         # a window of 2w+1 frames is concatenated, so only the input layer widens
         eff_sizes = list(layer_sizes)
         if self.input_window > 0:
@@ -194,8 +197,12 @@ class VideoSSL(pl.LightningModule):
         self.clusters = nn.parameter.Parameter(data=F.normalize(torch.randn(self.n_clusters, d), dim=-1),
                                                requires_grad=learn_clusters)
         if self.template_slots > 0:
+            # frozen is the strong control: if a never-learned random template
+            # works as well, the factoring is the active ingredient and the
+            # template's content is not -- the same logic as G01's random centre
             self.template = nn.parameter.Parameter(
-                data=F.normalize(torch.randn(self.template_slots, d), dim=-1))
+                data=F.normalize(torch.randn(self.template_slots, d), dim=-1),
+                requires_grad=not self.template_frozen)
         # geometric centres / radii for the A09 objectives (see __init__ comment)
         self.register_buffer('geo_centres', torch.zeros(self.n_clusters, d))
         self.register_buffer('geo_radii', torch.ones(self.n_clusters))
@@ -464,7 +471,8 @@ class VideoSSL(pl.LightningModule):
             if template_active:
                 plan_x = self._template_plan(features_X, mask_X)
                 plan_y = self._template_plan(features_Y, mask_Y)
-                induced, induced_valid = self.induced_alignment(plan_x, plan_y, mask_y=mask_Y)
+                induced, induced_valid = self.induced_alignment(
+                    plan_x, plan_y, mask_y=mask_Y, hard=not self.template_soft)
                 w = max(0.0, min(1.0, self.template_blend))
                 # where the template leaves the correspondence undefined, keep the
                 # pairwise plan rather than supervising with an invented target
@@ -1091,6 +1099,11 @@ if __name__ == '__main__':
                         help='temporal prior weight for the frames-to-template plan (default: --rho-seg)')
     parser.add_argument('--template-eps', type=float, default=None)
     parser.add_argument('--template-warmup-epochs', type=int, default=5)
+    parser.add_argument('--template-soft', action='store_true',
+                        help='A15: soft slot assignment; composition is then NOT exact (0.006 vs 3e-08)')
+    parser.add_argument('--template-frozen', action='store_true',
+                        help='A15 control: never learn the template. If this works too, the '
+                             'factoring is the active ingredient, not the template content')
     parser.add_argument('--template-blend', type=float, default=1.0,
                         help='1.0 replaces the pairwise pseudo-label, 0.5 blends it')
     parser.add_argument('--input-window', type=int, default=0,
@@ -1217,7 +1230,8 @@ if __name__ == '__main__':
                        template_slots=args.template_slots, template_rho=args.template_rho,
                        template_eps=args.template_eps,
                        template_warmup_epochs=args.template_warmup_epochs,
-                       template_blend=args.template_blend,
+                       template_blend=args.template_blend, template_soft=args.template_soft,
+                       template_frozen=args.template_frozen,
                        ray_geometry=args.ray_geometry, ray_mode=args.ray_mode,
                        ray_videos=args.ray_videos, ray_weight=args.ray_weight,
                        ray_radius_weight=args.ray_radius_weight,
