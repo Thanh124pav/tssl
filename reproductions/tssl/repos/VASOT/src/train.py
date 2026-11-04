@@ -27,12 +27,52 @@ from metrics import ClusteringMetrics, indep_eval_metrics
 num_eps = 1e-11
 
 
+class WindowedMLP(nn.Module):
+    """Frame encoder that reads a temporal window instead of a single frame.
+
+    A12 measured that within-action phase is decodable from one raw frame at
+    R2 0.103 and from a +-4 frame window at 0.314, so the single-frame input is
+    the binding constraint on phase information, not the projection or the
+    latent space. The optimum window (9 frames) matches the 11-frame median
+    FSeval action, i.e. the signal sits at action scale, which a per-frame
+    encoder can never reach.
+
+    This wraps the existing MLP so every call site keeps working unchanged,
+    including the diagnostic scripts that call `model.mlp(raw)` directly. With
+    window = 0 it is exactly the old module.
+    """
+
+    def __init__(self, mlp, window=0, feature_dim=None):
+        super().__init__()
+        self.mlp = mlp
+        self.window = int(window)
+        self.feature_dim = feature_dim
+
+    def forward(self, x):
+        if self.window <= 0:
+            return self.mlp(x)
+        flat = (x.dim() == 2)
+        if flat:
+            # call sites reshape (B, T, D) to (B*T, D); the project runs
+            # batch_size 1, which main() enforces when a window is requested,
+            # so the flattened axis is a single video's time axis
+            x = x.unsqueeze(0)
+        B, T, D_in = x.shape
+        w = self.window
+        offs = torch.arange(-w, w + 1, device=x.device)
+        idx = (torch.arange(T, device=x.device).unsqueeze(1) + offs.unsqueeze(0)).clamp(0, T - 1)
+        xw = x[:, idx.reshape(-1), :].reshape(B, T, (2 * w + 1) * D_in)
+        out = self.mlp(xw)
+        return out.squeeze(0) if flat else out
+
+
 class VideoSSL(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3,
                  n_ot_train=[50, 1], n_ot_eval=[50, 1], step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=False,
                  lambda_frames_train=0.05, lambda_actions_train=0.05, lambda_frames_eval=0.05, lambda_actions_eval=0.01,
                  temp=0.1, radius_gw=0.04,learn_clusters=True, n_frames=256, rho=0.1, beta=1, exclude_cls=None, visualize=False, activity=None,
                  rho_seg=None, rho_align=None, fix_virtual_column=False,
+                 input_window=0,
                  ray_geometry=False, ray_mode='sphere', ray_videos=3,
                  ray_weight=0.1, ray_radius_weight=1.0, ray_group_weight=0.1,
                  ray_shell_cost_weight=0.0, ray_warmup_epochs=10, ray_window=15,
@@ -125,9 +165,15 @@ class VideoSSL(pl.LightningModule):
         self.bezier_blend_max = bezier_blend_max
         self.bezier_blend_rampup = bezier_blend_rampup
         # initialize MLP
-        layers = [nn.Sequential(nn.Linear(sz, sz1), nn.ReLU()) for sz, sz1 in zip(layer_sizes[:-2], layer_sizes[1:-1])]
-        layers += [nn.Linear(layer_sizes[-2], layer_sizes[-1])]
-        self.mlp = nn.Sequential(*layers)
+        self.input_window = int(input_window)
+        # a window of 2w+1 frames is concatenated, so only the input layer widens
+        eff_sizes = list(layer_sizes)
+        if self.input_window > 0:
+            eff_sizes[0] = layer_sizes[0] * (2 * self.input_window + 1)
+        layers = [nn.Sequential(nn.Linear(sz, sz1), nn.ReLU()) for sz, sz1 in zip(eff_sizes[:-2], eff_sizes[1:-1])]
+        layers += [nn.Linear(eff_sizes[-2], eff_sizes[-1])]
+        self.mlp = WindowedMLP(nn.Sequential(*layers), self.input_window,
+                               feature_dim=layer_sizes[0])
 
         # initialize cluster centers/codebook
         d = self.layer_sizes[-1]
@@ -232,6 +278,12 @@ class VideoSSL(pl.LightningModule):
         sd = checkpoint.get('state_dict')
         if sd is None:
             return
+        # WindowedMLP wraps the old nn.Sequential, which renamed every encoder
+        # parameter from `mlp.X` to `mlp.mlp.X`. Remap so earlier checkpoints
+        # still load; the window itself carries no parameters.
+        stale = [k for k in list(sd) if k.startswith('mlp.') and not k.startswith('mlp.mlp.')]
+        for k in stale:
+            sd['mlp.mlp.' + k[len('mlp.'):]] = sd.pop(k)
         for name in ('geo_centres', 'geo_radii', 'geo_ready'):
             if name not in sd and hasattr(self, name):
                 sd[name] = getattr(self, name).clone()
@@ -931,6 +983,9 @@ if __name__ == '__main__':
                         help='Override temporal prior weight for segmentation (default: --rho)')
     parser.add_argument('--rho-align', type=float, default=None,
                         help='Override temporal prior weight for alignment (default: --rho)')
+    parser.add_argument('--input-window', type=int, default=0,
+                        help='A13: encoder reads a +-w frame window of raw features '
+                             '(0 = one frame, the published behaviour)')
     parser.add_argument('--ray-geometry', action='store_true',
                         help='A09: impose the ray/sphere correspondence geometry (default off)')
     parser.add_argument('--ray-mode', type=str, default='sphere', choices=['ray', 'sphere'])
@@ -1034,6 +1089,9 @@ if __name__ == '__main__':
     else:
         data_train = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
     data_test = VideoDataset('../data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
+    if args.input_window > 0 and args.batch_size != 1:
+        raise SystemExit('--input-window requires --batch-size 1: the call sites flatten '
+                         '(B, T, D) to (B*T, D), so a larger batch would window across videos')
     val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(data_test, batch_size=1, shuffle=False)
@@ -1045,7 +1103,7 @@ if __name__ == '__main__':
                        ub_frames=args.ub_frames, ub_actions=args.ub_actions, lambda_frames_train=args.lambda_frames_train, lambda_frames_eval=args.lambda_frames_eval,
                        lambda_actions_train=args.lambda_actions_train, lambda_actions_eval=args.lambda_actions_eval, step_size=args.step_size,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
-                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, fix_virtual_column=args.fix_virtual_column,
+                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, fix_virtual_column=args.fix_virtual_column, input_window=args.input_window,
                        ray_geometry=args.ray_geometry, ray_mode=args.ray_mode,
                        ray_videos=args.ray_videos, ray_weight=args.ray_weight,
                        ray_radius_weight=args.ray_radius_weight,

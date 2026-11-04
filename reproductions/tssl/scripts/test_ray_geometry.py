@@ -330,6 +330,42 @@ def t_shell_cost_and_radius_ema():
             f"0.2: {picked_close:.2f}; rho_1 -> {float(radii[1]):.4f} (true 1.3)")
 
 
+def t_windowed_encoder():
+    """A13's windowed encoder must be exactly the old module at window 0, must
+    stack the right frames with edge padding, and must handle both the (B, T, D)
+    and the flattened (B*T, D) call conventions the training step uses."""
+    import torch.nn as nn
+    sys.path.insert(0, str(SRC))
+    from train import WindowedMLP
+    torch.manual_seed(0)
+    T, D, H = 24, 6, 5
+    x = torch.randn(1, T, D)
+
+    # window 0 is the identity wrapper
+    inner0 = nn.Linear(D, H)
+    w0 = WindowedMLP(inner0, 0)
+    assert torch.allclose(w0(x), inner0(x)), "window 0 changed the output"
+    assert torch.allclose(w0(x[0]), inner0(x[0])), "window 0 broke the flat convention"
+
+    # window w concatenates 2w+1 frames, edge-padded, in order
+    w = 3
+    inner = nn.Linear(D * (2 * w + 1), H)
+    wm = WindowedMLP(inner, w)
+    out = wm(x)
+    assert out.shape == (1, T, H), f"bad shape {out.shape}"
+    for t in (0, 1, T // 2, T - 1):
+        idx = [min(max(t + o, 0), T - 1) for o in range(-w, w + 1)]
+        manual = inner(torch.cat([x[0, i] for i in idx]))
+        assert torch.allclose(out[0, t], manual, atol=1e-6), f"window content wrong at t={t}"
+    # the flattened convention must agree with the batched one
+    assert torch.allclose(wm(x[0]), out[0], atol=1e-6), "flat and batched disagree"
+    # edge padding must repeat the edge frame, not wrap around
+    idx0 = [0] * w + list(range(0, w + 1))
+    assert torch.allclose(out[0, 0], inner(torch.cat([x[0, i] for i in idx0])), atol=1e-6), \
+        "left edge is not edge-padded"
+    return (f"window 0 is bit-identical; window {w} stacks {2*w+1} frames in order with "
+            f"edge padding; flat and batched conventions agree")
+
 def main():
     for name, fn in [
         ("ray loss is zero exactly on rays", t_ray_loss_zero_on_rays),
@@ -339,6 +375,7 @@ def main():
         ("centre update respects the anchor", t_centre_update_respects_the_anchor),
         ("sphere blocks escape structurally", t_sphere_blocks_escape_without_a_hand_set_target),
         ("shell cost and radius EMA", t_shell_cost_and_radius_ema),
+        ("A13 windowed encoder", t_windowed_encoder),
         ("common point recovers a known centre", t_common_point_recovers_centre),
         ("centre update moves and guards", t_centre_update_moves_and_guards),
         ("smooth drift raises autocorrelation", t_smooth_drift),
