@@ -9,6 +9,7 @@ Ba mục tiêu cuối cùng:
 1. Đóng reproduction của VASOT, đặc biệt Desktop Assembly (DA) và YouTube Instructions (YTI).
 2. Reproduce VAOT như một track độc lập, với code, data, environment và metrics riêng.
 3. Kiểm chứng ba limitation hypothesis A/B/C và đánh giá proposal làm trơn discrete representations bằng arc-length, Gaussian, B-spline và Bézier.
+4. Thăm dò fine-grained action clustering: action-centered relation H, multi-video correspondence transfer, và cross-ratio chỉ sau pilot gate (Phase G).
 
 DA và YTI thuộc track **VASOT action segmentation**. Không được dùng chúng như bằng chứng rằng VAOT đã được reproduce. VAOT dùng protocol/dataset/metrics khác.
 
@@ -594,6 +595,123 @@ không collapse dưới warp mạnh.
 
 **Recommended dependency:** `E09/E13/E14 → N-A1, N-B1, N-C1`; `N-A1 → N-A2`; `N-B1 → N-B2`; `N-C1 → N-C2`. Do not launch A2/B2/C2 together. Revisit shared B2+C2 only if their separate failure modes are verified.
 
+
+### Phase G — Fine-grained action-centered multi-video alignment (new exploratory track)
+
+**Research framing:** VASOT's VA-to-AS benefit is stronger than AS-to-VA. Test whether action prototypes can become a *shared geometric reference* for fine-grained correspondences across >=3 videos, rather than only supplying coarse action assignments. Work from **diagnosis → cheap frozen-checkpoint pilot → controlled training → multi-video transfer → optional cross-ratio**. This track is an exploratory alternative to Phase N, not a claim that any failure mode is already proven.
+
+**Non-negotiable distinctions:**
+
+- VA transport T_xy (frames X ↔ Y) is DIFFERENT from AS transport T_xa (frames ↔ prototypes). D01 reported low entropy; E09 later reported T_xy effective support ~30.87/256 and explicitly said it was **not peaky**. Reconcile the metric/normalization/split/solver settings before any sharpness claim. Do not infer action-prototype collapse from diffuse T_xa alone.
+- AS datasets (FSeval/FS/DA/YTI) provide segmentation metrics, not necessarily ground-truth frame correspondences. If VA ground truth is unavailable (VAOT V03/V04 currently blocked), evaluate true frame correspondence on an explicitly labeled dataset or **known synthetic temporal transforms**; use pseudo-label or action-agreement scores only as proxies and label them clearly. GT may be used for offline diagnosis/evaluation, never leak into self-supervised training.
+- A prototype-centered line is a **soft geometric inductive bias**, not a theorem that matched frames must be collinear. In high-dimensional space, equal-radius sets are hyperspheres; 2D circles are only visualizations. Two points are always collinear, so multi-video benefit must be measured with >=3 videos and withheld-pair/third-video testing.
+- A few-shot method with GT anchors is **few-shot / semi-supervised**. Pseudo-anchors are a different self-supervised experiment. Cross-ratio by itself does not guarantee a minimum Euclidean separation or prevent near-collapse.
+- Keep the original cosine/FGW/VASOT baselines, code paths, prior protocol and run registry unchanged. New feature flags OFF by default. Stop early if diagnostics refute the assumed geometry.
+
+#### [ ] G00 — Transport and action-prototype geometry audit
+
+**Question:** Are action representations separated and stable? Is T_xa diffuse especially at action boundaries, and what exactly was measured as "peaky" in D01 versus E09?
+
+**Tasks:**
+- Reuse frozen, identifiable VASOT checkpoints and existing D00/E09 diagnostics; log the exact source, shape, scaling, marginals, entropy normalization, epsilon/rho and effective support of both T_xa and T_xy. Recompute per-row top-1/top-k, max probability, normalized entropy and exp(entropy); stratify by action, checkpoint and dataset to reconcile D01/E09 without rewriting old verdicts.
+- Compute pairwise cosine/distances of action prototypes, nearest-prototype margin, within-cluster scatter, between/within separation, prototype norm, assignment confusion, and stability through checkpoints/seed runs. Compare directly to random/initial prototypes; never infer collapse from entropy alone.
+- For GT boundaries (evaluation only), plot T_xa posterior by signed distance to boundary, boundary/interior entropy, mass on the previous/next action and whether high-entropy rows are concentrated at genuine transitions.
+- Quantify frame and prototype temporal jitter separately; for learned prototypes which are global parameters, distinguish **training-checkpoint drift** from per-video action-posterior temporal jitter.
+- Include examples that support and contradict each proposed mechanism.
+
+**Deliverables:** reports/G00_ACTION_TRANSPORT_GEOMETRY.md; CSV/JSON aggregates; separation/entropy/boundary plots; reproducible evaluation commands.
+
+**Exit criterion:** each metric has its matrix definition and normalization; a written verdict on prototype separation, boundary uncertainty and the D01–E09 discrepancy. No GPU training necessary.
+
+#### [ ] G01 — Within-action and cross-video geometry probe
+
+**Question:** Are corresponding phases better identified by their **direction from action center** than by raw cosine similarity, despite temporal jitter?
+
+**Tasks:**
+- For frame embedding z and action prototype a_k, compute normalized centered direction u=(z-a_k)/(||z-a_k||+eps), radius r=||z-a_k||, and angular score (same ray: 1-u_x·u_y; same undirected line: 1-(u_x·u_y)^2). Compare both; negative directions must not silently count as matches for the ray model.
+- Evaluate raw cosine, centered cosine, direction-only, radial-only, and blended cosine+geometry scores on positive correspondences and hard negatives **within the same action**. Use true alignment labels only for evaluation; otherwise construct synthetic speed/shift/reverse warps with known index maps and state interpolation limitations.
+- Measure pairwise AUROC/AUPRC, Recall@1/K, within-action phase discrimination, alignment error, angular variance across >=3 videos (if available), and score correlation with jitter. Separate positives from easy different-action negatives.
+- Perturb prototypes and frame features to quantify angular score sensitivity, especially when ||z-a_k||≈0; test soft T_xa-weighted centers versus hard argmax and misassigned/boundary frames.
+- Report whether projective low-dimensional head/projection is needed; do not fit a curve or launch training yet.
+
+**Deliverables:** reports/G01_ACTION_CENTERED_ALIGNMENT_PROBE.md; pair-score plots, positive/hard-negative histograms, sensitivity tests.
+
+**Exit criterion:** a matched-vs-hard-negative comparison with uncertainty/limitations and an explicit GO/NO-GO decision for a prototype-centered H. If centered directions are not competitive, test a tiny learned projection head only as an explicitly separate controlled fallback.
+
+#### [ ] G02 — Frozen-checkpoint pilot: soft radial/circle-based H
+
+**Hypothesis:** In a projected geometric space, frames of action k from video v may lie near an action-centered circle/hypersphere with video-specific radius r_{v,k}; frames at the same action phase may share a direction relative to the action center.
+
+**Tasks:**
+- Implement a plug-in geometric head q=g(z) with projected center c_k=g(a_k) (or separately learned center, reported as an ablation), unit direction u=(q-c_k)/max(||q-c_k||,eps), and radius r=||q-c_k||. Start with 2D/3D for interpretation; do NOT assume that projection or radial structure preserves original cosine similarity.
+- Define a **soft** radius penalty (r-r_{v,k})^2 and a geometric frame-pair cost C_H=1-u_x·u_y (or 1-dot^2 for an undirected-line ablation), with confidence or T_xa posterior weighting near action boundaries. Keep scoring defined if a center is ambiguous or radius tiny.
+- Compare frozen original cosine/OT score, H-only score, cosine+H (tunable weight), random/fixed/action-shuffled centers, and circle versus **no-radius-constraint** controls. Check whether radius encodes video identity while angle retains within-action phase.
+- Start with **offline scoring** from existing embeddings and a tiny synthetic toy geometry with known matched phases; only if that works run one lightweight trainable-head smoke test. Verify finite gradients, no NaN, and identical baseline behavior with the feature disabled.
+- Log actual runtime, angular/radial distributions, assignment confidence, matching quality and AS metrics. Do not report same-action accuracy as VA correspondence accuracy.
+
+**Deliverables:** isolated H module + unit tests, configs, reports/G02_RADIAL_H_PILOT.md, metrics and plots.
+
+**Exit criterion:** geometry correctly recovers the synthetic known-phase matches AND does not systematically worsen within-action matching against cosine on a realistic frozen checkpoint. Otherwise stop before training grid; document the failure.
+
+#### [ ] G03 — Controlled multi-video H and correspondence transfer
+
+**Question:** Does shared action-centered H improve **third-video transfer** and avoid exhaustive independent pairwise OT, beyond merely changing the similarity metric?
+
+**Tasks:**
+- Form video groups of >=3 instances of the same task/action (check data availability). Establish common action identity and match X→Y then predict corresponding frame in held-out Z through shared prototype-centered direction. Implement soft nearest-ray/angle retrieval with action posterior and ambiguity handling; do not presume a ray intersects Z's embedding trajectory uniquely.
+- Compare direct X↔Z cosine/VAOT-style matching, pairwise OT, reference/star matching with O(n) plans, H direction matching without radius, and H+radius. If VAOT GT remains unavailable, use held-out synthetic temporal warps/known mappings for primary correspondence evidence and an evaluation-only protocol with real GT when obtainable.
+- Report third-video Recall@1/K, alignment error, pairwise vs induced correspondence disagreement, multi-video cycle error, sharpness/calibration, action metrics, peak memory and wall time as number of videos grows. Explicitly separate the number of OT *plans* from total pairwise score compute; do not claim asymptotic improvement without measuring the actual algorithm.
+- Test varying speed, time reversal, repeated actions, missing segments, boundary ambiguity, action prototype jitter and low-confidence T_xa.
+- Only after frozen and tiny tests pass, run <=2 paired training seeds with one variable changed at a time and stop if confidence intervals or metrics show consistent degradation.
+
+**Deliverables:** reports/G03_MULTI_VIDEO_H_TRANSFER.md, grouped-data manifests, testable third-video retrieval scripts, complexity table, controlled ablations.
+
+**Exit criterion:** measurable third-video transfer improvement or measured computation benefit against a strong reference/star baseline, without unacceptable AS regression. Otherwise record NO-GO and avoid broad training.
+
+#### [ ] G04 — Optional bidirectional prototype refinement and stability controls
+
+**Gate:** G03 must give meaningful H correspondence evidence; otherwise skip. This is a separate ablation, not mandatory for establishing H.
+
+**Tasks:**
+- Use confidence-weighted, cross-video consistent pseudo-correspondences to refine action centers; compare frozen centers, direct joint updates, EMA/stop-gradient updates, and optional known-anchor/few-shot initialization as a separately labeled supervision regime.
+- Try between-action prototype contrastive or margin separation **only between different actions**; do not force all frames of the same action onto one ray. Track action identity assignment and within-action phase diversity simultaneously.
+- Measure prototype displacement across updates, nearest-center margin, within-action angular dispersion, near-center fraction, pseudo-label error propagation, gradient cosine and training stability. Perform explicit random/shuffled correspondence controls.
+- Re-run the H/VA/AS metrics, matching budget and seeds under each variant. Do not silently change the baseline loss or data protocol.
+
+**Deliverables:** reports/G04_PROTOTYPE_FEEDBACK.md; update/stability plots; tests and ablation configurations.
+
+**Exit criterion:** demonstrate that feedback is stable and helpful (or document why it is harmful) relative to frozen centers; no claim of convergence without evidence.
+
+#### [ ] G05 — Conditional cross-ratio phase regularization and frame-index ablation
+
+**Gate:** Only proceed after G02/G03 show a meaningful, nondegenerate phase-direction geometry. Cross-ratio is *not* needed for the first H pilot.
+
+**Tasks:**
+- Define a mathematically valid projective coordinate for phase-specific rays in a common projective plane (e.g., P^1 parameterized by a transversal); do not compute a 1D cross-ratio from arbitrary directions in R^d without demonstrating coplanarity/parameterization.
+- Select four distinguishable phase anchors per action. Treat three nondegenerate anchors as defining a 1D projectivity, and the fourth as a test of cross-ratio consistency; compare GT few-shot anchors (semi-supervised), pseudo-anchors (self-supervised) and shuffled/random anchors in **separate** protocols.
+- Implement numerically stable cross-ratio residuals with denominator clamps, collinear/coincident-point detection, min-separation/variance regularization and scale/coordinate sensitivity tests. A cross-ratio loss alone does not prevent near-collapse or fix absolute metric scale.
+- Compare baseline, H, CR-only, H+CR and H+generic variance/contrastive regularizer. Measure within-action phase separation, near-collapse fraction, matching accuracy, prototype stability, cross-video transfer and training divergence.
+- Test removing/weakening the VASOT hard frame-index prior ONLY after H+CR is stable. Compare original index prior, no prior, and CR-based relative-position signal under monotone nonlinear speed changes, reverse playback and repeated actions. Cross-ratio is not automatically invariant to arbitrary temporal reparameterization.
+- Do not claim CR helps avoid collapse from VA accuracy alone; record both representation geometry and task gains with paired seeds.
+
+**Deliverables:** reports/G05_CROSS_RATIO_PHASE.md; synthetic projective sanity tests, numerical edge-case tests, index-prior ablation, all four primary variants with paired-seed results.
+
+**Exit criterion:** H+CR improves against H and controls in a clearly identified regime (or is falsified); correctness of CR geometry and supervision setting is explicit.
+
+#### [ ] G06 — Synthesis and decision gate for fine-grained action clustering
+
+**Tasks:**
+- Synthesize G00–G05 as hypothesis → evidence → counter-evidence; indicate NOT RUN, FAILED, INCONCLUSIVE or SUPPORTED, and preserve all negative results.
+- Provide an ablation matrix separating action-center choice, radius, angular scoring, multi-video transfer, prototype feedback, cross-ratio, and frame-index prior.
+- Define a final claim no broader than the actual measured datasets, ground-truth access, seed range and supervision regime. Compare VASOT and, where executable, VAOT/TPL or reference-based multi-video baselines; do not claim SOTA from an FSeval segmentation proxy.
+- Decide STOP, REVISE H (e.g. conic/general relation), or SCALE to an independent dataset. If the circle/ray assumption fails, a conic is a **new hypothesis**, not an automatic fallback result.
+
+**Deliverables:** reports/G06_FINEGRAIN_ACTION_CLUSTERING_DECISION.md and reproducible run IDs / comparison tables.
+
+**Exit criterion:** an explicit research decision with failure mechanisms, generalization evidence and runtime scaling; all statements trace to artifacts.
+
+**Recommended dependency:** G00 → G01 → G02 → G03 → (optional G04) → (conditional G05) → G06. The first three packets can use frozen checkpoints and CPU; do not start G03/G05 training based solely on appealing plots.
+
 ### Phase F — Finalize
 
 #### [ ] F00 — Reproducibility audit và final report
@@ -617,8 +735,9 @@ S00 → S01 → S02 → S03
              ├─→ R00 → R01 → optional R02
              ├─→ D00 → D01/D02/D03 → D04
              ├─→ V00 → V01 → V02 → V03 → V04
-             └─→ E00 → E01 → E02/E03 → E04 → E05 → E06 → E07
-All completed tracks → F00
+             ├─→ E00 → E01 → E02/E03 → E04 → E05 → E06 → E07
+             └─→ G00 → G01 → G02 → G03 → optional G04 → conditional G05 → G06
+All applicable tracks → F00
 ```
 
 Không cần chờ VAOT xong mới làm diagnostics VASOT, nhưng không chạy hai training grid nặng đồng thời. Nếu session chỉ có CPU, ưu tiên S00–S02, D00 instrumentation, V00–V01, E04 tests và report aggregation.
@@ -660,6 +779,13 @@ Không cần chờ VAOT xong mới làm diagnostics VASOT, nhưng không chạy 
 | N-B2 | N-B1 gate | CPU; GPU optional | 0–2 | commutative-transport theory |
 | N-C1 | E09 + E14 | CPU/GPU | 0–2 | nonlinear-warp stress test |
 | N-C2 | N-C1 gate | CPU; GPU optional | 0–2 | quotient temporal transport theory |
+| G00 | E09 + D00 + frozen checkpoint | CPU | 0 | T_xa/T_xy, prototypes, boundary audit |
+| G01 | G00 | CPU | 0 | angular geometry and hard-negative diagnosis |
+| G02 | G01 gate | CPU; GPU optional | 0–1 tiny | radial/circle H offline pilot |
+| G03 | G02 gate + >=3 videos | CPU/GPU | 0–2 | multi-video third-view transfer and cost |
+| G04 | G03 gate (optional) | GPU | 1–2 | prototype feedback and stability |
+| G05 | G02/G03 success (conditional) | CPU/GPU | 0–2 | cross-ratio and index-prior ablation |
+| G06 | completed G packets | CPU | 0 | evidence synthesis and STOP/REVISE/SCALE |
 | F00 | completed tracks | CPU | 0 | final audit/report |
 
 ## 7. Session ledger
@@ -714,6 +840,13 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | N-B2 | PENDING | | Novel transition-commutative transport; gated by N-B1 |
 | N-C1 | PENDING | | Incremental nonlinear temporal-warp diagnostics |
 | N-C2 | PENDING | | Novel quotient-space time-reparameterized transport; gated by N-C1 |
+| G00 | PENDING | | Audit prototype separation, T_xa/T_xy and boundary distributions; reconcile D01/E09 |
+| G01 | PENDING | | Within-action angular matching, hard negatives and jitter |
+| G02 | PENDING | | Offline radial/circle H feasibility pilot |
+| G03 | PENDING | | >=3-video H transfer and runtime comparison |
+| G04 | PENDING (optional) | | Confidence-weighted prototype feedback and separation |
+| G05 | PENDING (gated) | | Anchored cross-ratio and hard frame-index replacement |
+| G06 | PENDING | | Synthesis, ablations and scaling decision |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án
@@ -725,4 +858,5 @@ Dự án chỉ được coi là hoàn tất khi:
 - A/B/C có controlled diagnostics, effect size và counter-evidence.
 - Arc/Gaussian/B-spline/Bézier được so sánh công bằng; không đánh đồng reparameterization với smoothing.
 - Final claims tách rõ reproduction, diagnosis, correlation và causal evidence.
+- Phase G (exploratory) phải tách correspondence GT khỏi segmentation proxy, so H với cosine/reference matching, kiểm tra third-video generalization và chỉ bật cross-ratio nếu pilot gate pass; negative findings vẫn được báo cáo.
 - Không có con số nào trong report chỉ tồn tại trong terminal history hoặc một checkpoint không xác định được nguồn.
