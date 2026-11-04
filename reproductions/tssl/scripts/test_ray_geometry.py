@@ -366,6 +366,68 @@ def t_windowed_encoder():
     return (f"window 0 is bit-identical; window {w} stacks {2*w+1} frames in order with "
             f"edge padding; flat and batched conventions agree")
 
+def t_template_alignment_is_cycle_consistent():
+    """A14's defining property: factoring the correspondence through a shared
+    template makes composition EXACT, not approximate. A02 measured the
+    published pairwise plan disagreeing with its own composition by 18.5
+    frames; on the rows where the template defines a correspondence this must
+    be zero by construction.
+
+    Two things this test pins down, both found by it rather than assumed:
+    exactness holds only for HARD slot assignments, and only on rows whose slot
+    has a counterpart in the target video.
+    """
+    sys.path.insert(0, str(SRC))
+    from train import VideoSSL
+    torch.manual_seed(0)
+    L = 12
+    model = VideoSSL.__new__(VideoSSL)
+    nX, nY, nZ = 60, 56, 64
+    plans = {}
+    for name, n in (('x', nX), ('y', nY), ('z', nZ)):
+        raw = torch.rand(1, n, L) + 0.05
+        plans[name] = raw / raw.sum(dim=-1, keepdim=True) / n
+
+    P_xy, v_xy = VideoSSL.induced_alignment(model, plans['x'], plans['y'])
+    P_yz, _ = VideoSSL.induced_alignment(model, plans['y'], plans['z'])
+    P_xz, v_xz = VideoSSL.induced_alignment(model, plans['x'], plans['z'])
+    assert torch.allclose(P_xy.sum(-1)[v_xy], torch.ones(int(v_xy.sum())), atol=1e-5)
+
+    rows = (v_xy & v_xz)[0]
+    err = float(((P_xy @ P_yz) - P_xz)[0][rows].abs().max())
+    assert err < 1e-5, f"composition is not exact on defined rows: {err}"
+
+    P_yx, _ = VideoSSL.induced_alignment(model, plans['y'], plans['x'])
+    P_xx, v_xx = VideoSSL.induced_alignment(model, plans['x'], plans['x'])
+    rt_rows = (v_xy & v_xx)[0]
+    rt = float(((P_xy @ P_yx) - P_xx)[0][rt_rows].abs().max())
+    assert rt < 1e-5, f"round trip is not exact: {rt}"
+
+    # the soft variant is NOT exact: that is why hard is the default
+    S_xy, _ = VideoSSL.induced_alignment(model, plans['x'], plans['y'], hard=False)
+    S_yz, _ = VideoSSL.induced_alignment(model, plans['y'], plans['z'], hard=False)
+    S_xz, _ = VideoSSL.induced_alignment(model, plans['x'], plans['z'], hard=False)
+    soft_err = float(((S_xy @ S_yz) - S_xz).abs().max())
+    assert soft_err > 100 * max(err, 1e-9), f"soft should not be exact, got {soft_err}"
+
+    # an unfactored pairwise surrogate has no such property
+    g = torch.Generator().manual_seed(1)
+    def rand_plan(a, b):
+        m = torch.rand(1, a, b, generator=g)
+        return m / m.sum(-1, keepdim=True)
+    base = float((rand_plan(nX, nY) @ rand_plan(nY, nZ) - rand_plan(nX, nZ)).abs().max())
+
+    # empty slots must be reported invalid, not filled with an invented target
+    sparse = torch.zeros(1, 8, L)
+    sparse[0, :, 0] = 1.0                      # every Y frame in slot 0
+    _, v_sparse = VideoSSL.induced_alignment(model, plans['x'], sparse)
+    assert not bool(v_sparse.all()), "rows with no counterpart were not flagged invalid"
+    frac = float(v_sparse.float().mean())
+
+    return (f"hard: exact to {err:.1e} on defined rows, round trip {rt:.1e}; soft off by "
+            f"{soft_err:.4f}; unfactored surrogate {base:.3f}; empty-slot guard leaves "
+            f"{frac:.2f} of rows defined")
+
 def main():
     for name, fn in [
         ("ray loss is zero exactly on rays", t_ray_loss_zero_on_rays),
@@ -376,6 +438,7 @@ def main():
         ("sphere blocks escape structurally", t_sphere_blocks_escape_without_a_hand_set_target),
         ("shell cost and radius EMA", t_shell_cost_and_radius_ema),
         ("A13 windowed encoder", t_windowed_encoder),
+        ("A14 template alignment is cycle-consistent", t_template_alignment_is_cycle_consistent),
         ("common point recovers a known centre", t_common_point_recovers_centre),
         ("centre update moves and guards", t_centre_update_moves_and_guards),
         ("smooth drift raises autocorrelation", t_smooth_drift),

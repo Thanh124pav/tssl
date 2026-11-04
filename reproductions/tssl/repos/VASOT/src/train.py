@@ -73,6 +73,8 @@ class VideoSSL(pl.LightningModule):
                  temp=0.1, radius_gw=0.04,learn_clusters=True, n_frames=256, rho=0.1, beta=1, exclude_cls=None, visualize=False, activity=None,
                  rho_seg=None, rho_align=None, fix_virtual_column=False,
                  input_window=0,
+                 template_slots=0, template_rho=None, template_warmup_epochs=5,
+                 template_eps=None, template_blend=1.0,
                  ray_geometry=False, ray_mode='sphere', ray_videos=3,
                  ray_weight=0.1, ray_radius_weight=1.0, ray_group_weight=0.1,
                  ray_shell_cost_weight=0.0, ray_warmup_epochs=10, ray_window=15,
@@ -166,6 +168,18 @@ class VideoSSL(pl.LightningModule):
         self.bezier_blend_rampup = bezier_blend_rampup
         # initialize MLP
         self.input_window = int(input_window)
+        # A14: alignment factored through an ordered template of L slots, so
+        # P(j|i) = sum_l P(l|i) P(j|l). Composing through a third video then
+        # gives the SAME plan as the direct one, making cycle-consistency
+        # structural rather than penalised. A02 measured the defect this fixes
+        # (X->Y->Z disagrees with X->Z by 18.5 frames, 39% within 4).
+        # L >> K on purpose: E13 did this with the K=12 action posterior and
+        # barely helped, which A05's granularity result explains.
+        self.template_slots = int(template_slots)
+        self.template_rho = template_rho
+        self.template_warmup_epochs = int(template_warmup_epochs)
+        self.template_eps = template_eps
+        self.template_blend = float(template_blend)
         # a window of 2w+1 frames is concatenated, so only the input layer widens
         eff_sizes = list(layer_sizes)
         if self.input_window > 0:
@@ -179,6 +193,9 @@ class VideoSSL(pl.LightningModule):
         d = self.layer_sizes[-1]
         self.clusters = nn.parameter.Parameter(data=F.normalize(torch.randn(self.n_clusters, d), dim=-1),
                                                requires_grad=learn_clusters)
+        if self.template_slots > 0:
+            self.template = nn.parameter.Parameter(
+                data=F.normalize(torch.randn(self.template_slots, d), dim=-1))
         # geometric centres / radii for the A09 objectives (see __init__ comment)
         self.register_buffer('geo_centres', torch.zeros(self.n_clusters, d))
         self.register_buffer('geo_radii', torch.ones(self.n_clusters))
@@ -439,6 +456,30 @@ class VideoSSL(pl.LightningModule):
                                                        lambda_actions=self.lambda_actions_train,
                                                        n_iters=self.n_ot_train, step_size=self.step_size)
 
+            # A14: replace the pairwise pseudo-label with one factored through the
+            # ordered template, which makes the plan cycle-consistent by
+            # construction. Blended so the arm is one factor at a time.
+            template_active = (self.template_slots > 0
+                               and self.current_epoch >= self.template_warmup_epochs)
+            if template_active:
+                plan_x = self._template_plan(features_X, mask_X)
+                plan_y = self._template_plan(features_Y, mask_Y)
+                induced, induced_valid = self.induced_alignment(plan_x, plan_y, mask_y=mask_Y)
+                w = max(0.0, min(1.0, self.template_blend))
+                # where the template leaves the correspondence undefined, keep the
+                # pairwise plan rather than supervising with an invented target
+                gate = (w * induced_valid.to(induced.dtype)).unsqueeze(-1)
+                opt_codes = (1.0 - gate) * opt_codes + gate * induced
+                self.log('tmpl_rows_defined', float(induced_valid.float().mean()))
+                self.log('tmpl_slot_entropy', float(
+                    -(plan_x / plan_x.sum(-1, keepdim=True).clamp_min(1e-12)).clamp_min(1e-12).log().mul(
+                        plan_x / plan_x.sum(-1, keepdim=True).clamp_min(1e-12)).sum(-1).mean()))
+                self.log('tmpl_slots_used', float(
+                    (plan_x.sum(dim=1)[0] > 1e-4).float().sum()))
+                self.log('tmpl_active', 1.0)
+            else:
+                self.log('tmpl_active', 0.0)
+
         # Eq (7)
         loss_ce_alignment = -((opt_codes * torch.log(codes + num_eps)) * mask_X.unsqueeze(2) * mask_Y.unsqueeze(1)).sum(
             dim=2).mean()
@@ -469,6 +510,66 @@ class VideoSSL(pl.LightningModule):
         self.log('train_loss', total_loss_ce)
 
         return total_loss_ce
+
+    def _template_plan(self, features, mask):
+        """P(slot | frame): the frames-to-template plan, from the public
+        segmentation solver with L slots instead of K actions. The temporal
+        prior at L slots is what keeps the slots ordered in time."""
+        T_f = features.shape[1]
+        L = self.template_slots
+        rho = self.rho_seg if self.template_rho is None else self.template_rho
+        eps = self.train_eps if self.template_eps is None else self.template_eps
+        cost = 1. - features @ self.template.T.unsqueeze(0)
+        cost = cost + segmentation_ot.temporal_prior(T_f, L, rho, features.device)
+        plan, _ = segmentation_ot.segment_ot(
+            cost, mask, eps=eps, alpha=self.alpha_train, radius=self.radius_gw,
+            ub_frames=False, ub_actions=True,
+            lambda_frames=self.lambda_frames_train,
+            lambda_actions=self.lambda_actions_train,
+            n_iters=self.n_ot_train, step_size=self.step_size)
+        return plan
+
+    def induced_alignment(self, plan_x, plan_y, mask_y=None, eps=1e-12, hard=True):
+        """Factor the correspondence through the template:
+            P(j | i) = sum_l P(l | i) P(j | l)
+
+        `hard=True` assigns each frame to its argmax slot. That is not a
+        convenience: composition is EXACT only for hard assignments. With soft
+        plans, composing through a third video inserts an extra
+        slot -> frame -> slot round trip, sum_j P(j|l) P(m|j), which is not the
+        identity, and the unit test measured a 0.008 residual on random plans.
+        With hard assignments on both sides P(j|l) is supported only on slot-l
+        frames, that term collapses to delta_lm, and X->Y->Z reproduces X->Z
+        exactly -- the property A02 found missing in the pairwise plan.
+
+        The pseudo-label is detached in any case, so hardening costs no
+        gradient. `hard=False` is kept so the soft variant can be measured
+        rather than assumed. Both are checked in scripts/test_ray_geometry.py.
+        """
+        col = plan_y
+        if mask_y is not None:
+            col = col * mask_y.unsqueeze(-1)
+        if hard:
+            L = plan_x.shape[-1]
+            sx = plan_x.argmax(dim=-1)
+            p_l_given_i = F.one_hot(sx, L).to(plan_x.dtype)
+            sy = col.argmax(dim=-1)
+            occupancy = F.one_hot(sy, L).to(col.dtype)
+            if mask_y is not None:
+                occupancy = occupancy * mask_y.unsqueeze(-1)
+            p_j_given_l = occupancy / occupancy.sum(dim=1, keepdim=True).clamp_min(eps)
+        else:
+            p_l_given_i = plan_x / plan_x.sum(dim=-1, keepdim=True).clamp_min(eps)
+            p_j_given_l = col / col.sum(dim=1, keepdim=True).clamp_min(eps)
+        induced = p_l_given_i @ p_j_given_l.transpose(1, 2)
+        # A frame whose slot has no counterpart in Y has NO defined
+        # correspondence. Inventing a uniform target there would supervise the
+        # model with noise and would also destroy the exactness above, so those
+        # rows are returned as invalid and the caller drops them from the loss.
+        rows = induced.sum(dim=-1, keepdim=True)
+        valid = (rows > eps).squeeze(-1)
+        induced = induced / rows.clamp_min(eps)
+        return induced, valid
 
     def _ray_geometry_step(self, batch, D, codes_segmentation_X):
         """A09 ray/sphere geometry objectives. Returns a zero tensor when off, so
@@ -983,6 +1084,15 @@ if __name__ == '__main__':
                         help='Override temporal prior weight for segmentation (default: --rho)')
     parser.add_argument('--rho-align', type=float, default=None,
                         help='Override temporal prior weight for alignment (default: --rho)')
+    parser.add_argument('--template-slots', type=int, default=0,
+                        help='A14: factor alignment through an ordered template of L slots '
+                             '(0 = off, the published pairwise plan). L >> n_clusters on purpose')
+    parser.add_argument('--template-rho', type=float, default=None,
+                        help='temporal prior weight for the frames-to-template plan (default: --rho-seg)')
+    parser.add_argument('--template-eps', type=float, default=None)
+    parser.add_argument('--template-warmup-epochs', type=int, default=5)
+    parser.add_argument('--template-blend', type=float, default=1.0,
+                        help='1.0 replaces the pairwise pseudo-label, 0.5 blends it')
     parser.add_argument('--input-window', type=int, default=0,
                         help='A13: encoder reads a +-w frame window of raw features '
                              '(0 = one frame, the published behaviour)')
@@ -1104,6 +1214,10 @@ if __name__ == '__main__':
                        lambda_actions_train=args.lambda_actions_train, lambda_actions_eval=args.lambda_actions_eval, step_size=args.step_size,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
                        n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, fix_virtual_column=args.fix_virtual_column, input_window=args.input_window,
+                       template_slots=args.template_slots, template_rho=args.template_rho,
+                       template_eps=args.template_eps,
+                       template_warmup_epochs=args.template_warmup_epochs,
+                       template_blend=args.template_blend,
                        ray_geometry=args.ray_geometry, ray_mode=args.ray_mode,
                        ray_videos=args.ray_videos, ray_weight=args.ray_weight,
                        ray_radius_weight=args.ray_radius_weight,
