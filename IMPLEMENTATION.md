@@ -509,7 +509,7 @@ không collapse dưới warp mạnh.
 
 **Research contract (2026-10-30).** Phase N is a NEW exploration track, not a reinterpretation of the completed limitation hypotheses D01–D04. Each direction has a low-risk **incremental/diagnostic** task and a gated **theory/novelty** task. Run the incremental task first; a better task score alone is not evidence of theoretical novelty. Preserve the frozen VASOT baseline and paired seeds; never use GT labels/boundaries to train. Distinguish the segmentation plan `T_xa` from alignment plan `T_xy` in every diagnostic. E09 found `T_xy` soft (not near one-hot); E14/E15 found poor low-capacity spline fit, which does not establish impossibility of a regular latent manifold. Do not claim causal identification from predictive influence or attention weights. A new method must beat appropriate simple controls, document prior art including non-CV work, and establish either a new identifiability/recovery property, a counterexample to the baseline, or a clearly justified optimization principle.
 
-#### [ ] N-A1 — Incremental diagnostic: dynamics-aware structural cost
+#### [x] N-A1 — Incremental diagnostic: dynamics-aware structural cost
 
 **Question:** Is frame-index proximity an inadequate proxy for within-video structural similarity, and can local dynamics features improve matching without changing GW itself?
 
@@ -537,7 +537,7 @@ không collapse dưới warp mạnh.
 
 **Exit criterion:** written mathematical statement with assumptions/proof or documented counterexample, complexity analysis and a synthetic test validating the distinguishing property before dataset-scale runs.
 
-#### [ ] N-B1 — Incremental diagnostic: transition-aware matching and gradient conflict
+#### [x] N-B1 — Incremental diagnostic: transition-aware matching and gradient conflict
 
 **Question:** Does segmentation share action identity but fail to preserve within-action transition phase, explaining why E13 action bridge barely helps alignment?
 
@@ -565,7 +565,7 @@ không collapse dưới warp mạnh.
 
 **Exit criterion:** formal proposition/counterexample plus nondegenerate recovery experiment and controlled paired-seed comparison, not just improved MoF.
 
-#### [ ] N-C1 — Incremental diagnostic: nonlinear temporal-warp stress test
+#### [x] N-C1 — Incremental diagnostic: nonlinear temporal-warp stress test
 
 **Question:** Does VASOT's temporal-index FGW impose structural penalties on semantically corresponding videos after local speed changes?
 
@@ -608,7 +608,7 @@ không collapse dưới warp mạnh.
 - A few-shot method with GT anchors is **few-shot / semi-supervised**. Pseudo-anchors are a different self-supervised experiment. Cross-ratio by itself does not guarantee a minimum Euclidean separation or prevent near-collapse.
 - Keep the original cosine/FGW/VASOT baselines, code paths, prior protocol and run registry unchanged. New feature flags OFF by default. Stop early if diagnostics refute the assumed geometry.
 
-#### [ ] G00 — Transport and action-prototype geometry audit
+#### [x] G00 — Transport and action-prototype geometry audit
 
 **Question:** Are action representations separated and stable? Is T_xa diffuse especially at action boundaries, and what exactly was measured as "peaky" in D01 versus E09?
 
@@ -623,7 +623,7 @@ không collapse dưới warp mạnh.
 
 **Exit criterion:** each metric has its matrix definition and normalization; a written verdict on prototype separation, boundary uncertainty and the D01–E09 discrepancy. No GPU training necessary.
 
-#### [ ] G01 — Within-action and cross-video geometry probe
+#### [x] G01 — Within-action and cross-video geometry probe
 
 **Question:** Are corresponding phases better identified by their **direction from action center** than by raw cosine similarity, despite temporal jitter?
 
@@ -711,6 +711,67 @@ không collapse dưới warp mạnh.
 **Exit criterion:** an explicit research decision with failure mechanisms, generalization evidence and runtime scaling; all statements trace to artifacts.
 
 **Recommended dependency:** G00 → G01 → G02 → G03 → (optional G04) → (conditional G05) → G06. The first three packets can use frozen checkpoints and CPU; do not start G03/G05 training based solely on appealing plots.
+
+### Phase A — Action-clustering space diagnostics (requested 2026-11-04)
+
+**Framing.** Five questions about the action codebook and the geometry around
+it, asked directly rather than through a proposed method. Motivated by G00
+(prototypes barely move from their random init), G01 (prototype-centered
+geometry carries no phase) and the 2026-11-04 audit (the alignment pseudo-label
+was shifted one frame). Frozen-checkpoint packets come first; the two training
+sweeps are cheap on FSeval (~2 min/run) and run paired seeds.
+
+#### [ ] A01 — Does the action-prototype initialisation change what is learned?
+
+Arms, none of which use labels: `random` (published), `orthogonal`, `data`
+(sampled frame embeddings), `temporal` (mean embedding per relative-time bin),
+`kmeans`. 3 paired seeds on FSeval. Report MoF/F1/mIoU, how far the final
+codebook travels from its own init, and whether any gain survives the seed
+spread. A gain here would mean the codebook is initialisation-determined, which
+G00 predicts; a null would falsify that reading.
+Script `scripts/run_a01_cluster_init.sh`, flag `--cluster-init` (default
+`random`, so every frozen baseline is untouched).
+
+#### [ ] A02 — What structure do the frames matched to one frame form, over n >= 3 videos?
+
+For reference frame i, the set of frames matched to it in the other videos is
+described by tightness (mean pairwise cosine), shape (PCA linearity,
+participation ratio), distance to the reference, and temporal spread of the
+matched indices, against `same_time`, `same_action` and `random` baselines with
+the same number of points. Adds cycle consistency (X->Z vs X->Y->Z) and
+round-trip error (X->Y->X). Needs no GT correspondence.
+Script `scripts/eval_a02_multiview_structure.py`.
+
+#### [ ] A03 — What is the geometry of the frames inside one video?
+
+Lag profile (cosine vs |i-j|), intrinsic dimension (two-NN and PCA
+participation ratio), trajectory statistics (step, turning angle,
+straightness), temporal revisits (how far in time the nearest neighbour is),
+and GT-label structure (silhouette, within/between scatter). Trained vs
+untrained encoder vs raw features, so "training did this" is separable.
+Script `scripts/eval_a03_within_video_geometry.py`.
+
+#### [ ] A04 — How confident, and how correct, is the frame -> segment assignment?
+
+Calibration of both confidences in the model (`T_xa` posterior and the softmax
+codes) against correctness under the repo's own one-to-one Hungarian protocol,
+plus a many-to-one purity protocol. Reliability diagram, ECE/MCE, AUROC of
+confidence for predicting its own correctness, stratified by boundary distance,
+segment duration and action.
+Script `scripts/eval_a04_segment_confidence.py`.
+
+#### [ ] A05 — How does segmentation granularity K affect training?
+
+K in {12, 24, 48, 128, 256, 512} x 2 seeds on FSeval (12 GT eval actions, 256
+sampled frames). **Protocol warning:** `metrics.eval_mof` matches clusters to
+GT one-to-one, so with K > #GT every frame in an unmatched cluster is an error
+and a falling MoF is partly mechanical. A04 is re-run on each checkpoint to get
+a many-to-one accuracy and cluster usage, which separates representation
+quality from the protocol's penalty.
+Script `scripts/run_a05_k_sweep.sh`.
+
+**Dependency:** A04 is reused by A05. A02/A03/A04 need only frozen checkpoints;
+A01/A05 are training sweeps and are not run concurrently with each other.
 
 ### Phase F — Finalize
 
@@ -834,19 +895,30 @@ Claude phải cập nhật bảng này sau mỗi packet; chi tiết run nằm tr
 | E15a | DONE | reports/E15_BOUNDARY_AWARE_FIT_RESULTS.md, 12 fit audits | Piecewise/repeated-knot-equivalent ceiling fails fit gate even with GT boundaries; ASOT under-segments, posterior changes over-segment. Training stopped. |
 | E15b | PENDING | smoothing-spline/Pareto fitter | Replace exact max-error objective with held-out reconstruction vs roughness/capacity selection; linear interpolation control required. |
 | E16 | PENDING | | Segment-wise temporal scaling augmentation, gated by reliable pseudo-boundaries. |
-| N-A1 | PENDING | | Incremental dynamics-aware structural cost |
-| N-A2 | PENDING | | Novel relational distributional transport; gated by N-A1 |
-| N-B1 | PENDING | | Incremental transition/phase diagnostics |
-| N-B2 | PENDING | | Novel transition-commutative transport; gated by N-B1 |
-| N-C1 | PENDING | | Incremental nonlinear temporal-warp diagnostics |
-| N-C2 | PENDING | | Novel quotient-space time-reparameterized transport; gated by N-C1 |
-| G00 | PENDING | | Audit prototype separation, T_xa/T_xy and boundary distributions; reconcile D01/E09 |
-| G01 | PENDING | | Within-action angular matching, hard negatives and jitter |
-| G02 | PENDING | | Offline radial/circle H feasibility pilot |
-| G03 | PENDING | | >=3-video H transfer and runtime comparison |
-| G04 | PENDING (optional) | | Confidence-weighted prototype feedback and separation |
-| G05 | PENDING (gated) | | Anchored cross-ratio and hard frame-index replacement |
-| G06 | PENDING | | Synthesis, ablations and scaling decision |
+| A06 | DONE | reports/A06_CONIC_STRUCTURE.md | Conic tested directly after the A02 linearity conclusion was challenged as too broad. Held-out fits with matched-complexity nulls and a validated detector (circle 0.056, ellipse 0.031, sphere shell 0.041, noise 0.60): real data sits at the NOISE level for line/circle/conic/quadric3d/quadric5d (0.72/0.69/0.67/0.70/0.85). Groups are only 54% planar; radius around the prototype is LESS constant than noise (ratio 1.14). Conic not supported; a learned projection remains untested. |
+| A07 | DONE | reports/A07_TRIVIAL_BASELINES.md | Position-only baseline reaches 82% of VASOT per-video (0.458 vs 0.560); decoder with untrained encoder 0.464. Breakdown: raw k-means 0.225, +0.126 encoder training, +0.105 OT decoder = 0.456. rho_seg=0 at decode costs nothing (0.463). Explains why a weak representation scores well. |
+| A09 | DESIGNED | reports/A09_RAY_GEOMETRY_PROTOCOL.md, repos/VASOT/src/ray_geometry.py, scripts/test_ray_geometry.py | Training objectives that IMPOSE the proposal's goals (1)(2), with 9/9 invariants. Two forced design changes: a separate free centre c_k (the codebook cannot be the geometric centre, A06) and directions from the smoothed drift (SNR 0.70 at action scale, A03). Degeneracy found and corrected: my first claim (goal 1 collapses to one ray) was FALSIFIED by its own test (between-group 0.027); the real one is CENTRE ESCAPE from goal (2) -- |c| 0->4.27, between-group 0.866, loss ~0 with no information -- blocked by a radius regulariser, not by contrastive. Centre update is closed-form Lloyd with conditioning/step/anchor guards, because G00 showed SGD does not move prototypes. Pre-registered falsification: if L_ray falls but purity does not move or A08's line retrieval still loses to T_xy alone, stop. Multi-video batch not yet implemented. |
+| A08 | DONE | reports/A08_PROPOSAL_AUDIT.md | Audit of the user's fine-grained control-clustering proposal, four links each tested at its precondition. L1 line-through-centre retrieval: the two-stage form DROPS R@1 0.980->0.967 vs T_xy alone; the additive form gains 0.14pp and random/shuffled centres score higher (0.9834/0.9829 vs 0.9814). L2 concurrency: group line fit explains 0.363 of variance, common-point ratio real/null 0.893, recovered centre 1.007 from the prototype. L3 cross-ratio: whole-video line captures 0.333 variance, CV across videos 1.17, 79% relative change under a monotone warp. L4: no collapse exists to prevent (255/256 clusters used at K=256, margin 0.718). Surviving direction: enforce the measured cycle-inconsistency (18.5 frames) instead of collinearity. |
+| A01 | DONE | reports/A01_CLUSTER_INIT.md | Init matters, as G00 predicted. `temporal` init: +0.0455 MoF, 3/3 seeds, paired std 0.0072, t=10.91 p=0.008. But A04 on the same checkpoints shows one-to-one +0.0563 (p=0.009) vs many-to-one +0.0060 (p=0.46): it fixes the ASSIGNMENT, not the representation. orthogonal/kmeans have larger means but flip sign across seeds (p=0.44/0.49). |
+| A02 | DONE | reports/A02_MULTIVIEW_STRUCTURE.md | Matched sets are tighter than same_time/same_action/random (0.820 vs 0.700/0.730/0.589; min pair 0.686) but LESS linear and more isotropic. Matched indices scatter 17.5 frames, only 51.7% share the GT action. Transport is NOT cycle-consistent: X->Z vs X->Y->Z differs 18.5 frames, 39% within 4; round trip 9.4 frames. |
+| A03 | DONE | reports/A03_WITHIN_VIDEO_GEOMETRY.md | Training compresses global variance (PR 22.7->5.8) but not local intrinsic dim (10.85->10.76); turning angle 116 deg unchanged. Lag profile lifts and flattens (lag128 0.07->0.53) with no shoulder. Decomposition: slow drift 4.7-dim lag1 0.999 + white jitter 15.4-dim lag1 0.108, variance 46.5/48.1. Over one median action drift moves 0.293 vs jitter radius 0.418 (SNR 0.70). |
+| A04 | DONE | reports/A04_SEGMENT_CONFIDENCE.md | T_xa posterior severely miscalibrated: conf 0.915 vs acc 0.456, ECE 0.459, 79% of frames in the top bin at claimed 0.987 / actual 0.499. Pseudo-label sharper than the student it teaches (0.915 vs 0.674). Accuracy is governed by boundary distance (0.355->0.673) while confidence moves 0.09. |
+| A05 | DONE | reports/A05_GRANULARITY.md | MoF collapses 0.473->0.043 over K=12..512, but many-to-one accuracy RISES to 0.674 at K=48 and the stranded-frame fraction tracks the collapse (0.00->0.90). ECE improves 0.490->0.134 at K=48. The collapse is the one-to-one protocol, not the representation. |
+| AUDIT-00 | DONE | reports/CODE_AUDIT_2026-11-04.md, scripts/test_diagnostics.py | 15 invariants on the diagnostic machinery, all passing. Fixed 4 defects in the new diagnostic code (one of which changed a G01 conclusion) and found an upstream off-by-one in VASOT's training alignment pseudo-label. |
+| X01 | RUNNING | scripts/run_x01_virtual_column_fix.sh | Paired 3-seed FSeval measurement of the virtual-column off-by-one: train.py prepends the virtual ROW but appends the virtual COLUMN while align_ot drops index 0 on both axes, so a real Y frame is dropped and opt_codes is shifted one frame. Fix is behind --fix-virtual-column, default OFF. |
+| N-A1 | DONE | reports/NA1_DYNAMICS_COST_DIAGNOSIS.md, diagnostics/na1/ | NEGATIVE. Dense-solver equivalence 1.3e-7. No structure beats frame index (0.349 fr); dense velocity 1.371 = shuffled 1.357 = random 1.413 = none 1.373; band_feature proxy gain 0.582 vs its own shuffled control 0.572. Feature metric does not encode temporal adjacency (9.2% successor-is-NN). A2 stopped. |
+| N-A2 | NOT RUN | | Gate failed at N-A1: no reproducible structural mismatch that distributions could distinguish. |
+| N-B1 | DONE | reports/NB1_TRANSITION_ALIGNMENT_DIAGNOSIS.md, diagnostics/nb1/ | INCONCLUSIVE, leaning negative. Phase mass only 1.28x uniform-in-action; best transition AUROC 0.581 (sym, w8) vs state 0.557; transition cost sharpens the plan (support 11.4->2.9) but worsens error (0.349->0.816). No gradient conflict: cos(seg,align)=+0.327; bridge grad norm 5.6x alignment. B2 not started. |
+| N-B2 | NOT RUN | | Gate not met: 0.024 AUROC margin is below the plan's own perturbation sensitivity (sigma=0.02 moves 29% of top-1 by 2.7 frames). |
+| N-C1 | DONE | reports/NC1_TEMPORAL_WARP_STRESS.md, diagnostics/nc1/ | FAILURE REGIME FOUND. Oracle GW cost 0 -> 0.089 with warp severity; piecewise penalised 2.9x global; prior term <=0.015 and rho=0 does not help; not an interpolation artifact. Solver error 0.35 -> 1.64 -> 15.86 fr for speed ratio 2.1/4.5/21, while DTW on the same cost stays <=1.33 fr. |
+| N-C2 | NOT RUN | | Gate clause 1 fails: a classic DTW baseline absorbs the warp failure. Recommended instead: controlled soft-DTW / Gromov-DTW structure comparison before any new invariance formalism. |
+| G00 | DONE | reports/G00_ACTION_TRANSPORT_GEOMETRY.md, diagnostics/g00/ | D01/E09 reconciled: different matrices (T_xa 0.110/1.50/0.915 vs T_xy 0.589/32.4/0.127 on FSeval; DA and YTI also reproduce E09). Prototypes no better separated than random init and stay at cosine 0.872 (FSeval) / 0.677 (DA) / 0.984 (YTI) from their OWN init vs 0.24-0.27 random-vs-random. Boundary uncertainty real but modest. |
+| G01 | DONE (NO-GO) | reports/G01_ACTION_CENTERED_ALIGNMENT_PROBE.md, diagnostics/g01/ | Every centered/angular gain is reproduced by a fixed RANDOM centre (P1 direction 0.873 hard vs 0.877 random); no variant beats cosine on real cross-video pairs (FSeval 0.571, DA 0.806); direction does not encode phase (same-phase 0.928 vs cross-phase 0.932 cross-video cosine on FSeval). |
+| G02 | NOT RUN | | Gated by G01 NO-GO. Separate fallback (tiny learned projection head) remains open and untested. |
+| G03 | NOT RUN | | Gated by G02. |
+| G04 | NOT RUN | | Gated by G03; G00 also shows prototypes barely move from init, which constrains any feedback claim. |
+| G05 | NOT RUN | | Gated by G02/G03. |
+| G06 | PENDING | | Ready to write: G00/G01 done, G02-G05 NOT RUN with recorded gates. |
 | F00 | DONE | reports/F00_FINAL_AUDIT.md | Project-level audit; traceable to manifests/configs/wandb |
 
 ## 8. Definition of done toàn dự án

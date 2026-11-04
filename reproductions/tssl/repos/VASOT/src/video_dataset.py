@@ -153,3 +153,26 @@ class VideoDataset(Dataset):
             mask = np.concatenate((np.full(n_frames, 1, dtype=bool), np.zeros(n_samples - n_frames, dtype=bool)))
         
         return indices, mask
+
+class MultiVideoDataset(VideoDataset):
+    """Returns V >= 3 videos per item, for objectives that need more than a pair.
+
+    Item 0 and item 1 are the (X, Y) pair the existing training step consumes, so
+    with n_videos_per_item=2 this is behaviourally the pair dataset and the
+    baseline loss is unchanged. The extra videos exist only for the geometry
+    objectives, which need a third view to define a correspondence group at all.
+    """
+
+    def __init__(self, *args, n_videos_per_item=3, **kwargs):
+        super().__init__(*args, **kwargs)
+        if n_videos_per_item < 2:
+            raise ValueError('n_videos_per_item must be at least 2')
+        self.n_videos_per_item = n_videos_per_item
+
+    def __getitem__(self, idx):
+        n = len(self.video_fnames)
+        take = min(self.n_videos_per_item, n)
+        others = np.random.permutation([j for j in range(n) if j != idx])[: take - 1]
+        order = [idx] + list(others)
+        return [self._load_video_data(self.video_fnames[j]) for j in order]
+

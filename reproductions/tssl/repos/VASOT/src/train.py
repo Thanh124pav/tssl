@@ -32,7 +32,12 @@ class VideoSSL(pl.LightningModule):
                  n_ot_train=[50, 1], n_ot_eval=[50, 1], step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=False,
                  lambda_frames_train=0.05, lambda_actions_train=0.05, lambda_frames_eval=0.05, lambda_actions_eval=0.01,
                  temp=0.1, radius_gw=0.04,learn_clusters=True, n_frames=256, rho=0.1, beta=1, exclude_cls=None, visualize=False, activity=None,
-                 rho_seg=None, rho_align=None,
+                 rho_seg=None, rho_align=None, fix_virtual_column=False,
+                 ray_geometry=False, ray_mode='sphere', ray_videos=3,
+                 ray_weight=0.1, ray_radius_weight=1.0, ray_group_weight=0.1,
+                 ray_shell_cost_weight=0.0, ray_warmup_epochs=10, ray_window=15,
+                 ray_stride=4, ray_cycle_tol=4, ray_centre_momentum=0.9,
+                 ray_centre_margin=0.35, ray_update_centres=True,
                  action_bridge_cost_weight=0.0, action_bridge_loss_weight=0.0,
                  action_bridge_temp=0.1, action_bridge_warmup_epochs=5,
                  arc_reparam=False, arc_warmup_epochs=5,
@@ -71,6 +76,27 @@ class VideoSSL(pl.LightningModule):
         self.rho = rho
         self.rho_seg = rho if rho_seg is None else rho_seg
         self.rho_align = rho if rho_align is None else rho_align
+        # see the virtual-frame block in training_step; OFF reproduces the
+        # published behaviour bit-for-bit
+        self.fix_virtual_column = fix_virtual_column
+        # A09 ray/sphere geometry objectives. Centres and radii are BUFFERS, not
+        # parameters: G00 measured that gradient descent does not move this kind of
+        # parameter (prototypes stay at cosine 0.872 from their own init), so they
+        # are re-estimated in closed form instead.
+        self.ray_geometry = ray_geometry
+        self.ray_mode = ray_mode
+        self.ray_videos = ray_videos
+        self.ray_weight = ray_weight
+        self.ray_radius_weight = ray_radius_weight
+        self.ray_group_weight = ray_group_weight
+        self.ray_shell_cost_weight = ray_shell_cost_weight
+        self.ray_warmup_epochs = ray_warmup_epochs
+        self.ray_window = ray_window
+        self.ray_stride = ray_stride
+        self.ray_cycle_tol = ray_cycle_tol
+        self.ray_centre_momentum = ray_centre_momentum
+        self.ray_centre_margin = ray_centre_margin
+        self.ray_update_centres = ray_update_centres
         self.action_bridge_cost_weight = action_bridge_cost_weight
         self.action_bridge_loss_weight = action_bridge_loss_weight
         self.action_bridge_temp = action_bridge_temp
@@ -107,6 +133,10 @@ class VideoSSL(pl.LightningModule):
         d = self.layer_sizes[-1]
         self.clusters = nn.parameter.Parameter(data=F.normalize(torch.randn(self.n_clusters, d), dim=-1),
                                                requires_grad=learn_clusters)
+        # geometric centres / radii for the A09 objectives (see __init__ comment)
+        self.register_buffer('geo_centres', torch.zeros(self.n_clusters, d))
+        self.register_buffer('geo_radii', torch.ones(self.n_clusters))
+        self.register_buffer('geo_ready', torch.zeros(1))
 
         # Dedicated learnable latent basis for bspline_space='latent' (E10b).
         # Shape (latent_dim, d), unit-norm rows at init.  Trains through the
@@ -189,6 +219,22 @@ class VideoSSL(pl.LightningModule):
         if rampup_epochs <= 0:
             return target
         return min(1.0, e / float(rampup_epochs)) * target
+
+    def on_load_checkpoint(self, checkpoint):
+        """Keep every checkpoint written before the A09 buffers existed loadable.
+
+        Adding `geo_centres` / `geo_radii` / `geo_ready` as persistent buffers
+        made `load_from_checkpoint` fail on all earlier checkpoints with
+        "Missing key(s) in state_dict". Every frozen baseline and every
+        diagnostic script loads through that path, so the buffers are filled in
+        with their constructor defaults when a checkpoint predates them.
+        """
+        sd = checkpoint.get('state_dict')
+        if sd is None:
+            return
+        for name in ('geo_centres', 'geo_radii', 'geo_ready'):
+            if name not in sd and hasattr(self, name):
+                sd[name] = getattr(self, name).clone()
 
     def training_step(self, batch, batch_idx):
         # NOTE: The comments below assume batchsize=1 so we dont talk about the batch element dimension
@@ -312,10 +358,21 @@ class VideoSSL(pl.LightningModule):
             ## Added for virtual frames
             B, N, K = cost_matrix.shape
             dev = cost_matrix.device
+            # align_ot returns T[:, 1:, 1:], i.e. it drops index 0 on BOTH axes
+            # as the virtual frame. The published code prepends the virtual row
+            # but appends the virtual column, so the column that gets dropped is
+            # a real Y frame and the virtual column survives in the pseudo-label.
+            # That shifts opt_codes one frame relative to `codes`: two identical
+            # videos align with a mean -0.95 frame offset instead of the
+            # identity (reproduced in scripts/test_diagnostics.py).
+            # The flag is OFF by default so every frozen baseline stays bit-identical.
             top_row = torch.ones(B, 1, K).to(dev) * 0.5
             cost_matrix = torch.cat((top_row, cost_matrix), dim=1)
-            left_column = torch.ones(B, N + 1, 1).to(dev) * 0.5
-            cost_matrix = torch.cat((cost_matrix, left_column), dim=2)
+            virtual_column = torch.ones(B, N + 1, 1).to(dev) * 0.5
+            if self.fix_virtual_column:
+                cost_matrix = torch.cat((virtual_column, cost_matrix), dim=2)
+            else:
+                cost_matrix = torch.cat((cost_matrix, virtual_column), dim=2)
 
             # opt_codes represent a matrix Tb for each batch element
             # size of a matrix Tb is (no. of frames in X x no. of frames in Y)
@@ -353,9 +410,171 @@ class VideoSSL(pl.LightningModule):
             + (self.beta * loss_ce_alignment)
             + (self.action_bridge_loss_weight * loss_action_bridge)
         )
+
+        loss_geometry = self._ray_geometry_step(batch, D, codes_segmentation_X)
+        total_loss_ce = total_loss_ce + loss_geometry
+
         self.log('train_loss', total_loss_ce)
 
         return total_loss_ce
+
+    def _ray_geometry_step(self, batch, D, codes_segmentation_X):
+        """A09 ray/sphere geometry objectives. Returns a zero tensor when off, so
+        the baseline path is numerically untouched."""
+        zero = self.clusters.new_zeros(())
+        if (not self.ray_geometry) or len(batch) < 3:
+            return zero
+        if self.current_epoch < self.ray_warmup_epochs:
+            return zero
+        import ray_geometry as rg
+
+        # embeddings for every video in the batch, WITH gradient
+        feats, masks = [], []
+        for rec in batch:
+            raw, m = rec[0], rec[1]
+            f = F.normalize(self.mlp(raw.reshape(-1, raw.shape[-1])).reshape(
+                raw.shape[0], raw.shape[1], D), dim=-1)
+            f, _ = self._maybe_warp(f, m)
+            feats.append(f)
+            masks.append(m)
+        V = len(feats)
+        drift = [rg.smooth_drift(f, self.ray_window) for f in feats]
+
+        with torch.no_grad():
+            # action posteriors from the public segmentation solver
+            posts = []
+            for f, m in zip(feats, masks):
+                T_f = f.shape[1]
+                cost = 1. - f @ self.clusters.T.unsqueeze(0)
+                cost = cost + segmentation_ot.temporal_prior(T_f, self.n_clusters,
+                                                             self.rho_seg, f.device)
+                plan, _ = segmentation_ot.segment_ot(
+                    cost, m, eps=self.train_eps, alpha=self.alpha_train,
+                    radius=self.radius_gw, ub_frames=False, ub_actions=True,
+                    lambda_frames=self.lambda_frames_train,
+                    lambda_actions=self.lambda_actions_train,
+                    n_iters=self.n_ot_train, step_size=self.step_size)
+                posts.append(plan / plan.sum(-1, keepdim=True).clamp_min(1e-12))
+
+            # lazily initialise the centres at the posterior-weighted centroids
+            if float(self.geo_ready) < 1.0:
+                zc = torch.cat([d[0] for d in drift], dim=0)
+                pc = torch.cat([p[0] for p in posts], dim=0)
+                w = pc.sum(dim=0).clamp_min(1e-6)
+                self.geo_centres.copy_((pc.T @ zc) / w.unsqueeze(-1))
+                dist = (zc.unsqueeze(1) - self.geo_centres.unsqueeze(0)).norm(dim=-1)
+                self.geo_radii.copy_(((dist * pc).sum(0) / w).clamp_min(1e-2))
+                self.geo_ready.fill_(1.0)
+
+            # reference video 0 against every other, both directions
+            n_ref = feats[0].shape[1]
+            fwd, bwd = {}, {}
+            for v in range(1, V):
+                p_fwd = self._align_argmax(feats[0], feats[v], masks[0], masks[v])
+                p_bwd = self._align_argmax(feats[v], feats[0], masks[v], masks[0])
+                fwd[v], bwd[v] = p_fwd, p_bwd
+            idx, members, member_ok = rg.build_groups(
+                fwd, bwd, n_ref, stride=self.ray_stride, cycle_tol=self.ray_cycle_tol)
+
+        self.log('geo_group_yield', float(len(members)) / max(len(range(0, n_ref, self.ray_stride)), 1))
+        if len(members) < 3:
+            self.log('geo_active', 0.0)
+            return zero
+
+        ref_idx = [i for i, _ in zip(idx, range(len(idx)))]
+        kept = [idx[j] for j in range(len(idx)) if j < len(members)]
+        # group points: member 0 is the reference frame itself
+        pts, msk = [], []
+        for gi, i in enumerate(kept):
+            row = [drift[0][0, i]] + [drift[v][0, int(members[gi][v - 1])] for v in range(1, V)]
+            pts.append(torch.stack(row))
+            msk.append(torch.tensor([True] + list(member_ok[gi]), device=feats[0].device))
+        group_points = torch.stack(pts)
+        group_mask = torch.stack(msk)
+
+        # one action per group, from the reference frame's posterior
+        k_of = posts[0][0][torch.as_tensor(kept, device=feats[0].device)].argmax(-1)
+
+        total = zero
+        diag = {}
+        for k in k_of.unique():
+            sel = (k_of == k)
+            if int(sel.sum()) < 2:
+                continue
+            gp = group_points[sel]
+            gm = group_mask[sel]
+            centre = self.geo_centres[k]
+            if self.ray_mode == 'sphere':
+                loss_k, u, r = rg.sphere_alignment_loss(
+                    gp, gm, centre, self.geo_radii[k],
+                    radius_weight=self.ray_radius_weight)
+            else:
+                loss_k, u, r = rg.ray_alignment_loss(gp, gm, centre)
+                loss_k = loss_k + self.ray_radius_weight * rg.radius_regularisation_loss(
+                    r, float(self.geo_radii[k]), gm)
+            nce, hinge, _ = rg.group_separation_loss(u, gm)
+            total = total + loss_k + self.ray_group_weight * (nce + hinge)
+            diag.setdefault('within', []).append(float(
+                torch.einsum('gvd,gwd->gvw', u.detach(), u.detach())[
+                    gm.unsqueeze(2) & gm.unsqueeze(1)].mean()))
+            diag.setdefault('radius', []).append(float(r.detach().mean()))
+            if self.ray_update_centres and int(sel.sum()) >= 3:
+                anchor = (gp.detach() * gm.unsqueeze(-1)).sum(dim=(0, 1)) / \
+                         gm.float().sum().clamp_min(1.0)
+                info = rg.concurrency_centre_update(
+                    self.geo_centres, int(k), gp.detach(), gm,
+                    torch.ones(gp.shape[0], device=gp.device),
+                    momentum=self.ray_centre_momentum, anchor=anchor)
+                diag.setdefault('centre_updated', []).append(info['updated'])
+                if 'conditioning' in info:
+                    diag.setdefault('conditioning', []).append(info['conditioning'])
+
+        with torch.no_grad():
+            # keep the centres from merging; the shell cost cannot discriminate at
+            # all when they sit closer together than the frames sit from them
+            # (measured: nearest pair 0.268 vs radius 0.424)
+            dmat = torch.cdist(self.geo_centres, self.geo_centres)
+            k_n = self.geo_centres.shape[0]
+            for a in range(k_n):
+                for b in range(a + 1, k_n):
+                    gap = float(dmat[a, b])
+                    if gap < self.ray_centre_margin and gap > 1e-6:
+                        push = (self.geo_centres[a] - self.geo_centres[b]) / gap
+                        shift = 0.5 * (self.ray_centre_margin - gap)
+                        self.geo_centres[a] += 0.25 * shift * push
+                        self.geo_centres[b] -= 0.25 * shift * push
+            rg.update_radii(self.geo_radii, torch.cat([d.detach() for d in drift], dim=0),
+                            self.geo_centres, torch.cat([p for p in posts], dim=0),
+                            momentum=0.95)
+
+        self.log('geo_active', 1.0)
+        self.log('geo_loss', total.detach())
+        for key, vals in diag.items():
+            if vals:
+                self.log(f'geo_{key}', float(sum(vals) / len(vals)))
+        self.log('geo_centre_nearest', float(
+            torch.cdist(self.geo_centres, self.geo_centres).masked_fill(
+                torch.eye(self.n_clusters, dtype=torch.bool, device=self.geo_centres.device),
+                float('inf')).min()))
+        self.log('geo_radius_mean', float(self.geo_radii.mean()))
+        return self.ray_weight * total
+
+    def _align_argmax(self, f_a, f_b, m_a, m_b):
+        """Detached argmax correspondence a -> b from the public alignment solver."""
+        n_a, n_b = f_a.shape[1], f_b.shape[1]
+        cost = 1. - f_a @ f_b.transpose(1, 2)
+        cost = cost + alignment_ot.temporal_prior(n_a, n_b, self.rho_align, f_a.device)
+        cost = torch.cat((torch.ones(1, 1, n_b, device=f_a.device) * 0.5, cost), dim=1)
+        if self.fix_virtual_column:
+            cost = torch.cat((torch.ones(1, n_a + 1, 1, device=f_a.device) * 0.5, cost), dim=2)
+        else:
+            cost = torch.cat((cost, torch.ones(1, n_a + 1, 1, device=f_a.device) * 0.5), dim=2)
+        plan, _ = alignment_ot.align_ot(
+            cost, m_a, m_b, eps=self.train_eps, alpha=self.alpha_train,
+            radius=self.radius_gw, ub_frames=self.ub_frames, ub_actions=self.ub_actions,
+            lambda_frames=self.lambda_frames_train, lambda_actions=self.lambda_actions_train,
+            n_iters=self.n_ot_train, step_size=self.step_size)
+        return plan[0].argmax(-1).cpu().tolist()
 
     def validation_step(self, batch, batch_idx):
         features_raw_X, mask_X, gt_X, fname_X, n_subactions_X = batch[0]
@@ -593,6 +812,82 @@ class VideoSSL(pl.LightningModule):
     
 
 
+def init_action_prototypes(model, dataset, mode, seed=0, max_videos=20, verbose=True):
+    """A01: replace the random prototype codebook with a different initialiser.
+
+    All modes keep the unit-norm convention the training loop enforces. Data
+    dependent modes read the TRAINING videos' features through the freshly
+    initialised encoder; they use no labels and no ground truth, so they stay
+    inside the self-supervised protocol. 'random' is the published behaviour and
+    returns without touching anything.
+    """
+    if mode == 'random':
+        return {'mode': 'random', 'changed': False}
+    import numpy as _np
+    k, d = model.clusters.shape
+    g = torch.Generator().manual_seed(seed)
+    info = {'mode': mode, 'changed': True, 'n_clusters': int(k), 'dim': int(d)}
+
+    if mode == 'orthogonal':
+        a = torch.randn(max(k, d), d, generator=g)
+        q, _ = torch.linalg.qr(a)
+        protos = q[:k] if k <= q.shape[0] else torch.cat([q] * (k // q.shape[0] + 1))[:k]
+        info['note'] = ('exactly orthonormal only while k <= d; beyond that the rows '
+                        'cannot all be orthogonal') if k > d else 'orthonormal rows'
+    else:
+        names = dataset.video_fnames[:max_videos]
+        feats, positions = [], []
+        was_training = model.training
+        model.eval()
+        with torch.no_grad():
+            for nm in names:
+                raw, mask, _, _, _ = dataset._load_video_data(nm)
+                z = F.normalize(model.mlp(raw.unsqueeze(0)), dim=-1)[0]
+                keep = torch.as_tensor(_np.asarray(mask), dtype=torch.bool)
+                z = z[keep]
+                feats.append(z)
+                positions.append(torch.linspace(0, 1, z.shape[0]))
+        if was_training:
+            model.train()
+        Z = torch.cat(feats, dim=0)
+        P = torch.cat(positions, dim=0)
+
+        if mode == 'data':
+            idx = torch.randperm(Z.shape[0], generator=g)[:k]
+            protos = Z[idx]
+            info['note'] = 'k randomly sampled frame embeddings'
+        elif mode == 'temporal':
+            edges = torch.linspace(0, 1, k + 1)
+            rows = []
+            for i in range(k):
+                m = (P >= edges[i]) & (P <= edges[i + 1])
+                rows.append(Z[m].mean(0) if int(m.sum()) > 0
+                            else Z[torch.randint(Z.shape[0], (1,), generator=g)][0])
+            protos = torch.stack(rows)
+            info['note'] = 'mean embedding of each of k equal relative-time bins'
+        elif mode == 'kmeans':
+            from sklearn.cluster import KMeans
+            sub = Z[torch.randperm(Z.shape[0], generator=g)[:min(20000, Z.shape[0])]].numpy()
+            km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(sub)
+            protos = torch.from_numpy(km.cluster_centers_).float()
+            info['note'] = f'k-means on {sub.shape[0]} frame embeddings'
+            info['kmeans_inertia'] = float(km.inertia_)
+        else:
+            raise ValueError(f'unknown cluster init {mode}')
+
+    protos = F.normalize(protos, dim=-1).to(model.clusters.device)
+    with torch.no_grad():
+        model.clusters.data.copy_(protos)
+    cos = protos.cpu() @ protos.cpu().T
+    off = cos[~torch.eye(k, dtype=torch.bool)]
+    info['offdiag_cosine_mean'] = float(off.mean())
+    info['nearest_cosine_mean'] = float((cos - torch.eye(k) * 2).max(dim=-1).values.mean())
+    if verbose:
+        print(f"[cluster-init] {mode}: off-diagonal cosine mean "
+              f"{info['offdiag_cosine_mean']:.4f}, nearest {info['nearest_cosine_mean']:.4f}")
+    return info
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train representation learning pipeline")
 
@@ -636,6 +931,30 @@ if __name__ == '__main__':
                         help='Override temporal prior weight for segmentation (default: --rho)')
     parser.add_argument('--rho-align', type=float, default=None,
                         help='Override temporal prior weight for alignment (default: --rho)')
+    parser.add_argument('--ray-geometry', action='store_true',
+                        help='A09: impose the ray/sphere correspondence geometry (default off)')
+    parser.add_argument('--ray-mode', type=str, default='sphere', choices=['ray', 'sphere'])
+    parser.add_argument('--ray-videos', type=int, default=3,
+                        help='videos per training item; >=3 is required to define a group')
+    parser.add_argument('--ray-weight', type=float, default=0.1)
+    parser.add_argument('--ray-radius-weight', type=float, default=1.0)
+    parser.add_argument('--ray-group-weight', type=float, default=0.1)
+    parser.add_argument('--ray-shell-cost-weight', type=float, default=0.0)
+    parser.add_argument('--ray-warmup-epochs', type=int, default=10)
+    parser.add_argument('--ray-window', type=int, default=15)
+    parser.add_argument('--ray-stride', type=int, default=4)
+    parser.add_argument('--ray-cycle-tol', type=int, default=4)
+    parser.add_argument('--ray-centre-momentum', type=float, default=0.9)
+    parser.add_argument('--ray-centre-margin', type=float, default=0.35)
+    parser.add_argument('--no-ray-centre-update', action='store_true',
+                        help='ablate goal (2): keep the geometry loss, freeze the centres')
+    parser.add_argument('--cluster-init', type=str, default='random',
+                        choices=['random', 'orthogonal', 'data', 'temporal', 'kmeans'],
+                        help='A01: action prototype initialisation (default random = published behaviour)')
+    parser.add_argument('--fix-virtual-column', action='store_true',
+                        help='prepend the virtual alignment column instead of appending it, so the '
+                             'column align_ot drops is the virtual one and not a real Y frame '
+                             '(default off: reproduces the published off-by-one)')
     parser.add_argument('--action-bridge-cost-weight', type=float, default=0.0,
                         help='Weight of action-posterior distance added to alignment OT cost')
     parser.add_argument('--action-bridge-loss-weight', type=float, default=0.0,
@@ -706,7 +1025,14 @@ if __name__ == '__main__':
     os.makedirs(ckpt_subdir, exist_ok=True)
 
     data_val = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
-    data_train = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
+    if args.ray_geometry:
+        from video_dataset import MultiVideoDataset
+        data_train = MultiVideoDataset('../data', args.dataset, args.n_frames,
+                                       standardise=args.std_feats, random=True,
+                                       action_class=args.activity,
+                                       n_videos_per_item=args.ray_videos)
+    else:
+        data_train = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
     data_test = VideoDataset('../data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
     val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
@@ -719,7 +1045,17 @@ if __name__ == '__main__':
                        ub_frames=args.ub_frames, ub_actions=args.ub_actions, lambda_frames_train=args.lambda_frames_train, lambda_frames_eval=args.lambda_frames_eval,
                        lambda_actions_train=args.lambda_actions_train, lambda_actions_eval=args.lambda_actions_eval, step_size=args.step_size,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
-                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
+                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, rho_seg=args.rho_seg, rho_align=args.rho_align, fix_virtual_column=args.fix_virtual_column,
+                       ray_geometry=args.ray_geometry, ray_mode=args.ray_mode,
+                       ray_videos=args.ray_videos, ray_weight=args.ray_weight,
+                       ray_radius_weight=args.ray_radius_weight,
+                       ray_group_weight=args.ray_group_weight,
+                       ray_shell_cost_weight=args.ray_shell_cost_weight,
+                       ray_warmup_epochs=args.ray_warmup_epochs, ray_window=args.ray_window,
+                       ray_stride=args.ray_stride, ray_cycle_tol=args.ray_cycle_tol,
+                       ray_centre_momentum=args.ray_centre_momentum,
+                       ray_centre_margin=args.ray_centre_margin,
+                       ray_update_centres=not args.no_ray_centre_update, beta=args.beta, exclude_cls=args.exclude, visualize=args.visualize, activity=args.activity,
                        action_bridge_cost_weight=args.action_bridge_cost_weight,
                        action_bridge_loss_weight=args.action_bridge_loss_weight,
                        action_bridge_temp=args.action_bridge_temp,
@@ -734,6 +1070,9 @@ if __name__ == '__main__':
                        bezier_maxseg=args.bezier_maxseg, bezier_warmup_epochs=args.bezier_warmup_epochs,
                        bezier_space=args.bezier_space, bezier_blend_max=args.bezier_blend_max,
                        bezier_blend_rampup=args.bezier_blend_rampup)
+
+    cluster_init_info = init_action_prototypes(
+        ssl, data_train, args.cluster_init, seed=args.seed)
 
     logger = None
     if args.wandb:
