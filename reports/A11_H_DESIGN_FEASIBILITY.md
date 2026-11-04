@@ -143,3 +143,113 @@ segments. The probe in §1 bounds what a *decoder* can read linearly or with a
 small forest; it does not bound what a different training objective could create,
 only what is currently present. The Kendall τ in §3 uses the solver's own hard
 assignments, so it inherits their errors.
+
+---
+
+## 6. Addendum — what if H lives in a different latent space?
+
+Date: 2026-11-04, same session. The question is whether H should be imposed on a
+dedicated latent space rather than on the action/frame embedding.
+
+### 6.1 The structural argument, both ways
+
+In favour: the current 40-d embedding is **overloaded**. It serves the
+segmentation cosine cost, the alignment cosine cost and the GW temporal
+structure at once, so any geometric constraint added to it fights all three.
+A06 measured that conflict directly — the codebook wants unit-norm rows while a
+geometric centre must sit inside the cloud.
+
+Against: in the shared space the geometry at least has to coexist with the task
+costs. In a dedicated space **nothing stops it from being satisfied vacuously**
+— the general form of the A09 degeneracy, since any head can be trained to
+produce any geometry. A dedicated latent space is therefore *easier to satisfy
+and harder to make meaningful*, and it is only accountable if the correspondence
+is actually computed in it, so that the alignment loss flows through it.
+
+### 6.2 The precedent in this repository
+
+VASOT already has a dedicated learnable latent bottleneck
+(`bspline_space='latent'`, `latent_basis`), used by E10b. All eight
+configurations landed at or below the baseline:
+
+| run | MoF |
+|---|---:|
+| E00 baseline s1 | 0.4945 |
+| E10b latent dz12 b0.3 s0 / s1 | 0.4998 / 0.4928 |
+| E10b latent dz12 b1.0 s0 / s1 | 0.4307 / 0.4407 |
+| E10b latent dz24 b0.3 s0 / s1 | 0.4239 / 0.4812 |
+| E10b latent dz24 b1.0 s0 / s1 | 0.3709 / 0.4639 |
+
+That is explained rather than merely noted: the bottleneck was fed from the
+embedding, whose phase ceiling is 0.055 (§6.3), and it was asked to support the
+curve hypothesis that A06 later refuted.
+
+### 6.3 What a latent head could read, by input
+
+Phase R² on held-out videos, action label given to the probe:
+
+| input to the head | linear | 2-layer MLP |
+|---|---:|---:|
+| raw features | 0.057 | **0.103** |
+| trained embedding | 0.023 | 0.055 |
+| drift component | 0.023 | overfits |
+
+So a latent head **fed from the raw features roughly doubles** what one fed from
+the embedding can expose. The first design conclusion is therefore concrete: if
+such a head is built, it must branch off the raw features, not off `z`.
+
+### 6.4 The finding that reframes the question
+
+The probe was then given a temporal **window** of raw features instead of a
+single frame:
+
+| window | input dims | linear | 2-layer MLP |
+|---|---:|---:|---:|
+| ±0 (one frame) | 64 | 0.057 | 0.103 |
+| ±2 | 320 | 0.166 | 0.228 |
+| **±4** | 576 | **0.177** | **0.314** |
+| ±8 | 1088 | 0.092 | 0.286 |
+| ±16 | 2112 | −0.313 | 0.234 |
+
+**A ±4 frame window triples the phase ceiling, 0.103 → 0.314.** No new geometry,
+no new latent space, no new loss — only a wider input.
+
+The optimum is also interpretable: ±4 frames is a 9-frame window against a
+median FSeval action of 11 frames. The phase information sits at exactly the
+action scale, which is precisely the scale at which A03 measured a
+signal-to-noise ratio of 0.70 for a *single* frame. The model reads one frame at
+a time, so the only thing it can learn is roughly where in the video it is —
+which a single frame does convey through the slow drift — while phase within an
+action requires comparing neighbours, which the architecture never does.
+
+### 6.5 Answer
+
+The leverage is **not the space, it is the input**. A different latent space
+helps only through what it reads, and the measurement says the input is the
+binding constraint: one frame 0.103, a ±4 window 0.314.
+
+Revised ranking, replacing §4:
+
+1. **Give the encoder a temporal window** (±4 frames). It triples the phase
+   ceiling and is the smallest change with the largest measured effect. Every H
+   built after this has three times the budget.
+2. **Stop destroying what is there** — the raw features are still 2.5× more
+   linearly phase-decodable than the trained embedding.
+3. **Then** impose H, in a space fed from the windowed features, and only if the
+   correspondence is computed in that space so the geometry stays accountable.
+4. H1 (ordered sub-action codebook) before H2 (simplex), on the evidence in §3.
+
+This also predicts why every geometric proposal tested today failed at its
+precondition: they all operate on a representation whose per-frame phase content
+is near zero, so there is no structure for them to find or to impose
+meaningfully. The order of operations was wrong, not only the shape.
+
+### 6.6 Limitations
+
+One checkpoint family, FSeval, 20 videos, 4-fold leave-videos-out. The windowed
+probe sees up to 2112 input dimensions against roughly 4000 training frames, so
+the linear degradation at ±8 and ±16 is partly overfitting rather than a real
+decline; the MLP curve, which peaks at ±4 and declines gently, is the more
+trustworthy shape. An R² ceiling measured by a probe bounds what a decoder can
+read from the *current* features; it does not bound what a different feature
+extractor could provide.
