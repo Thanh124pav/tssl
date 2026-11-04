@@ -75,6 +75,7 @@ class VideoSSL(pl.LightningModule):
                  input_window=0,
                  template_slots=0, template_rho=None, template_warmup_epochs=5,
                  template_eps=None, template_blend=1.0, template_soft=False,
+                 align_target_blur=0,
                  template_frozen=False,
                  ray_geometry=False, ray_mode='sphere', ray_videos=3,
                  ray_weight=0.1, ray_radius_weight=1.0, ray_group_weight=0.1,
@@ -182,6 +183,12 @@ class VideoSSL(pl.LightningModule):
         self.template_eps = template_eps
         self.template_blend = float(template_blend)
         self.template_soft = bool(template_soft)
+        # A16: the parsimonious form of A14/A15. If a never-learned random
+        # template works as well as a learned one (A15 frozen), the template is
+        # not doing anything and the active ingredient is the block structure of
+        # the target. Blurring the existing pairwise pseudo-label reproduces that
+        # structure with no slots, no parameters and three lines.
+        self.align_target_blur = int(align_target_blur)
         self.template_frozen = bool(template_frozen)
         # a window of 2w+1 frames is concatenated, so only the input layer widens
         eff_sizes = list(layer_sizes)
@@ -487,6 +494,15 @@ class VideoSSL(pl.LightningModule):
                 self.log('tmpl_active', 1.0)
             else:
                 self.log('tmpl_active', 0.0)
+
+            if self.align_target_blur > 0:
+                w = self.align_target_blur
+                blurred = F.avg_pool2d(opt_codes.unsqueeze(1), kernel_size=2 * w + 1,
+                                       stride=1, padding=w, count_include_pad=False).squeeze(1)
+                blurred = blurred * mask_X.unsqueeze(2) * mask_Y.unsqueeze(1)
+                opt_codes = blurred / blurred.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                self.log('blur_support', float(
+                    (-(opt_codes.clamp_min(1e-12).log() * opt_codes).sum(-1)).exp().mean()))
 
         # Eq (7)
         loss_ce_alignment = -((opt_codes * torch.log(codes + num_eps)) * mask_X.unsqueeze(2) * mask_Y.unsqueeze(1)).sum(
@@ -1099,6 +1115,9 @@ if __name__ == '__main__':
                         help='temporal prior weight for the frames-to-template plan (default: --rho-seg)')
     parser.add_argument('--template-eps', type=float, default=None)
     parser.add_argument('--template-warmup-epochs', type=int, default=5)
+    parser.add_argument('--align-target-blur', type=int, default=0,
+                        help='A16: box-blur the alignment pseudo-label over +-W frames on both '
+                             'axes (0 = off). The template-free form of A14/A15')
     parser.add_argument('--template-soft', action='store_true',
                         help='A15: soft slot assignment; composition is then NOT exact (0.006 vs 3e-08)')
     parser.add_argument('--template-frozen', action='store_true',
@@ -1231,6 +1250,7 @@ if __name__ == '__main__':
                        template_eps=args.template_eps,
                        template_warmup_epochs=args.template_warmup_epochs,
                        template_blend=args.template_blend, template_soft=args.template_soft,
+                       align_target_blur=args.align_target_blur,
                        template_frozen=args.template_frozen,
                        ray_geometry=args.ray_geometry, ray_mode=args.ray_mode,
                        ray_videos=args.ray_videos, ray_weight=args.ray_weight,
