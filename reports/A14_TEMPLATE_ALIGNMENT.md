@@ -167,3 +167,40 @@ blocks removed that noise.
 This also predicts A15's `frozen` arm: if the active ingredient is block
 structure rather than a learned shared coordinate, a never-learned random
 template should work just as well.
+
+---
+
+## 8. Correction — the template was never learned, and A15's control was vacuous
+
+Found while computing purity for A15: `A14_tmpl64_FSeval_s0` and
+`A15_frozen_FSeval_s0` agree on MoF, purity and ECE to four decimals
+(0.5153 / 0.6523 / 0.4198). Checked directly: the two checkpoints are
+**bit-identical across every weight** (max abs difference 0.000e+00), and the
+template equals its seeded initialisation while `clusters` did move.
+
+Root cause: `_template_plan` is called inside the `with torch.no_grad()` block
+where the pseudo-label is built, so the template parameter never receives a
+gradient. `--template-frozen` is a no-op.
+
+This cuts both ways and both must be stated:
+
+- **A15's `frozen` arm is vacuous as a control.** It is a duplicate run, not an
+  ablation. The claim "a never-learned random template works as well, therefore
+  the template's content is not the active ingredient" is **withdrawn as an
+  inference from that arm**, because the arm tested nothing.
+- **A14's own description was wrong.** The template was a *random, fixed*
+  projection in every arm, including the ones described as learned. So the
+  "learned shared coordinate" framing never applied, and the +5.5 pp MoF was
+  obtained with a random never-learned template all along.
+
+The empirical content I wanted from the control therefore survives, by accident
+rather than by design: a random fixed template gives +5.5 pp. But it is not
+evidence from a comparison, and the honest form is weaker — the slots are a
+fixed random partition that the *encoder* organises itself around, so "the
+template learned nothing" is not the same as "a partition is unnecessary".
+
+What is now genuinely untested is the opposite question: **does a template that
+actually adapts do better?** A18 answers it with an EMA update of each slot
+toward the mean embedding of the frames assigned to it, which is how the repo
+learns its other codebook-like objects and what A09 did for the geometric
+centres. Queued.

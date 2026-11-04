@@ -75,7 +75,7 @@ class VideoSSL(pl.LightningModule):
                  input_window=0,
                  template_slots=0, template_rho=None, template_warmup_epochs=5,
                  template_eps=None, template_blend=1.0, template_soft=False,
-                 align_target_blur=0,
+                 align_target_blur=0, template_ema=0.0,
                  template_frozen=False,
                  ray_geometry=False, ray_mode='sphere', ray_videos=3,
                  ray_weight=0.1, ray_radius_weight=1.0, ray_group_weight=0.1,
@@ -189,6 +189,12 @@ class VideoSSL(pl.LightningModule):
         # the target. Blurring the existing pairwise pseudo-label reproduces that
         # structure with no slots, no parameters and three lines.
         self.align_target_blur = int(align_target_blur)
+        # A18: the template parameter never receives a gradient, because the plan
+        # that uses it is built inside torch.no_grad (see section 8 of the A14
+        # report). An EMA of each slot toward the frames assigned to it is how
+        # the repo learns its other codebook-like objects, and is what A09 used
+        # for the geometric centres. 0 keeps the random fixed template.
+        self.template_ema = float(template_ema)
         self.template_frozen = bool(template_frozen)
         # a window of 2w+1 frames is concatenated, so only the input layer widens
         eff_sizes = list(layer_sizes)
@@ -486,6 +492,17 @@ class VideoSSL(pl.LightningModule):
                 gate = (w * induced_valid.to(induced.dtype)).unsqueeze(-1)
                 opt_codes = (1.0 - gate) * opt_codes + gate * induced
                 self.log('tmpl_rows_defined', float(induced_valid.float().mean()))
+                if self.template_ema > 0:
+                    for plan, feats in ((plan_x, features_X), (plan_y, features_Y)):
+                        w = plan[0] / plan[0].sum(dim=0, keepdim=True).clamp_min(1e-8)
+                        obs = w.T @ feats[0]
+                        seen = plan[0].sum(dim=0) > 1e-5
+                        upd = F.normalize(
+                            self.template_ema * self.template.data[seen]
+                            + (1 - self.template_ema) * obs[seen], dim=-1)
+                        self.template.data[seen] = upd
+                    self.log('tmpl_drift', float(
+                        (self.template.data - F.normalize(self.template.data, dim=-1)).abs().max()))
                 self.log('tmpl_slot_entropy', float(
                     -(plan_x / plan_x.sum(-1, keepdim=True).clamp_min(1e-12)).clamp_min(1e-12).log().mul(
                         plan_x / plan_x.sum(-1, keepdim=True).clamp_min(1e-12)).sum(-1).mean()))
@@ -1118,6 +1135,9 @@ if __name__ == '__main__':
     parser.add_argument('--align-target-blur', type=int, default=0,
                         help='A16: box-blur the alignment pseudo-label over +-W frames on both '
                              'axes (0 = off). The template-free form of A14/A15')
+    parser.add_argument('--template-ema', type=float, default=0.0,
+                        help='A18: EMA momentum for adapting the template to the data '
+                             '(0 = the random fixed template of A14/A15)')
     parser.add_argument('--template-soft', action='store_true',
                         help='A15: soft slot assignment; composition is then NOT exact (0.006 vs 3e-08)')
     parser.add_argument('--template-frozen', action='store_true',
@@ -1250,7 +1270,7 @@ if __name__ == '__main__':
                        template_eps=args.template_eps,
                        template_warmup_epochs=args.template_warmup_epochs,
                        template_blend=args.template_blend, template_soft=args.template_soft,
-                       align_target_blur=args.align_target_blur,
+                       align_target_blur=args.align_target_blur, template_ema=args.template_ema,
                        template_frozen=args.template_frozen,
                        ray_geometry=args.ray_geometry, ray_mode=args.ray_mode,
                        ray_videos=args.ray_videos, ray_weight=args.ray_weight,
