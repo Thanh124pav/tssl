@@ -93,3 +93,77 @@ FSeval, 3 seeds, 30 epochs. Cycle error and the metric triple are computed on
 seed 0 and 1 checkpoints only, 8 videos, stride 8. The K=48 arm has no paired
 third seed for its own baseline. The block-structure hypothesis in §4 is a
 hypothesis; A15 is what decides it.
+
+---
+
+## 7. Addendum — the mechanism, measured directly
+
+Same session, on CPU while A15 trained. Three measurements on
+`A14_tmpl64_FSeval_s0`.
+
+### 7.1 The block-structure hypothesis of §4 is confirmed exactly
+
+| quantity | induced plan | pairwise plan |
+|---|---:|---:|
+| variance explained by slot-pair blocks | **1.0000** | 0.1969 |
+| effective support | 12.43 frames | 30.01 frames |
+| top-1 mass | 0.197 | 0.198 |
+
+The induced plan *is* a block matrix, by construction. Its effective support of
+12.4 frames is about one median FSeval action (11 frames), so it localises to
+action precision, not frame precision.
+
+### 7.2 A trap I walked into, and the measurement that got me out
+
+The pre-registered criterion was eval-time cycle error, and §3 measured it on the
+model's **pairwise** plan, where it got worse. It is tempting to answer that the
+method's deliverable is the *induced* plan, and to measure that instead:
+
+| plan, at inference | cycle error | within 4 frames |
+|---|---:|---:|
+| induced | **2.49 frames** | **0.969** |
+| pairwise | 32.75 frames | 0.298 |
+| argmax agreement between the two | 0.059 | |
+
+A 13× improvement on the A02 defect. **This is not a rescue, and reporting it as
+one would be moving the goalposts** — it is a different object, measured after
+seeing the result. Worse, it is almost circular: a plan composed through a shared
+coordinate is cycle-consistent *as arithmetic*. Consistency is free here.
+
+What is not free is accuracy, so that was measured next, on monotone warps where
+the true index map is exact:
+
+| checkpoint | plan | mean error (frames) | R@1 (≤2 fr) |
+|---|---|---:|---:|
+| A14 tmpl64 | pairwise | **0.381** | **0.972** |
+| A14 tmpl64 | **induced** | **59.3** | **0.136** |
+| A14 tmpl12 | induced | 65.0 | 0.063 |
+| baseline | pairwise | 0.405 | 0.969 |
+
+The induced correspondence is consistent and **almost entirely wrong**: 59 frames
+of error against 0.38, and R@1 0.136 against 0.972. It agrees with the pairwise
+plan on 5.9% of frames. So the template does **not** deliver a usable multi-video
+correspondence, and §3's verdict stands.
+
+### 7.3 What the gain actually is, and why it is still interesting
+
+Training on the induced target improves segmentation (+5.5 pp MoF, purity
++0.066, ECE −0.070) while that target is 94% different from the pairwise plan and
+150× less accurate. The learned pairwise plan afterwards is *sharper* than
+baseline (support 5.04 vs 12.60) and marginally more accurate (0.381 vs 0.405).
+
+So the honest statement is: **training on a deliberately coarse, mostly-wrong but
+smooth alignment target improves segmentation.** Which means the alignment
+pseudo-label's frame-level content was not merely useless but actively harmful to
+the segmentation branch.
+
+That coheres with everything else measured today rather than contradicting it:
+within-action phase is near zero in the representation (A11, R² ≈ 0.10 ceiling),
+the embedding encodes absolute position (A03), the benchmark rewards position
+(A07), and a one-frame shift in the pseudo-label costs nothing (X01). The fine
+structure of the alignment target was noise, and replacing it with action-scale
+blocks removed that noise.
+
+This also predicts A15's `frozen` arm: if the active ingredient is block
+structure rather than a learned shared coordinate, a never-learned random
+template should work just as well.
