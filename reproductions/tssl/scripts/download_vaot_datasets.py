@@ -64,8 +64,12 @@ def main():
         # "._*" entries are macOS resource forks, not data
         items = [i for i in items if not Path(i.path).name.startswith("._")]
         print(f"== {name}: {len(items)} files listed", flush=True)
+        ok = []
         with ThreadPoolExecutor(args.threads) as ex:
-            ok = list(ex.map(lambda i: fetch(i, out), items))
+            for n, r in enumerate(ex.map(lambda i: fetch(i, out), items), 1):
+                ok.append(r)
+                if n % 100 == 0:
+                    print(f"   {name}: {n}/{len(items)}", flush=True)
         bad += ok.count(False)
         print(f"== {name}: {sum(ok)}/{len(items)} present", flush=True)
     sys.exit(1 if bad else 0)
