@@ -60,6 +60,13 @@ case "$arm" in
   csls_blur6_local) extra=(--align-csls 10 --align-target-blur 6 --local-weight 1.0 --local-warmup-epochs 5) ;;
   tneg_blur6) extra=(--spread-reg tneg --spread-weight 0.5 --align-target-blur 6) ;;
   ldreg_local) extra=(--spread-reg ldreg --spread-weight 0.1 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  # lower-weight VICReg, alone and next to the alignment configuration
+  vcreg03) extra=(--spread-reg vc --spread-weight 0.3) ;;
+  vcreg06) extra=(--spread-reg vc --spread-weight 0.6) ;;
+  vcreg1_csls_local) extra=(--spread-reg vc --spread-weight 1.0 --align-csls 10 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  vcreg1_local) extra=(--spread-reg vc --spread-weight 1.0 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  vcreg1_csls_blur6_local) extra=(--spread-reg vc --spread-weight 1.0 --align-csls 10 --align-target-blur 6 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  vcreg03_csls_blur6_local) extra=(--spread-reg vc --spread-weight 0.3 --align-csls 10 --align-target-blur 6 --local-weight 1.0 --local-warmup-epochs 5) ;;
   *) echo "unknown arm $arm" >&2; exit 2 ;;
 esac
 out=$root/artifacts/runs/current/mrt_${bench//:/_}_${arm}_s${seed}
