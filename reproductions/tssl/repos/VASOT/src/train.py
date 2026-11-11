@@ -29,7 +29,7 @@ from metrics import ClusteringMetrics, indep_eval_metrics
 num_eps = 1e-11
 
 
-MRT = {'decenter': 0.0, 'ot_noise': 0.0, 'hub': 'template', 'local': 0.0, 'local_warmup': 5, 'local_raw': False}  # set from CLI before the model is built
+MRT = {'decenter': 0.0, 'ot_noise': 0.0, 'hub': 'template', 'local': 0.0, 'local_warmup': 5, 'local_raw': False, 'target_power': 1.0}  # set from CLI before the model is built
 
 
 class WindowedMLP(nn.Module):
@@ -660,6 +660,15 @@ class VideoSSL(pl.LightningModule):
                 blurred = blurred * mask_X.unsqueeze(2) * mask_Y.unsqueeze(1)
                 opt_codes = blurred / blurred.sum(dim=-1, keepdim=True).clamp_min(1e-12)
                 self.log('blur_support', float(
+                    (-(opt_codes.clamp_min(1e-12).log() * opt_codes).sum(-1)).exp().mean()))
+
+            if MRT['target_power'] != 1.0:
+                # T^gamma, each row rescaled to its previous mass: gamma < 1
+                # softens the pseudo-label, gamma > 1 sharpens it.
+                row_mass = opt_codes.sum(dim=-1, keepdim=True)
+                powed = opt_codes.clamp_min(0).pow(MRT['target_power'])
+                opt_codes = powed / powed.sum(dim=-1, keepdim=True).clamp_min(1e-12) * row_mass
+                self.log('target_support', float(
                     (-(opt_codes.clamp_min(1e-12).log() * opt_codes).sum(-1)).exp().mean()))
 
         # Eq (7)
@@ -1388,6 +1397,9 @@ if __name__ == '__main__':
     parser.add_argument('--local-warmup-epochs', type=int, default=5)
     parser.add_argument('--local-raw', action='store_true',
                         help='local loss on un-normalised residuals (z - prototype)')
+    parser.add_argument('--align-target-power', type=float, default=1.0,
+                        help='raise the alignment pseudo-label to this power and renormalise '
+                             'rows (<1 softens, >1 sharpens, 1 = off)')
     parser.add_argument('--decenter', type=float, default=0.0,
                         help='MRT: fraction of the EMA embedding mean removed before every cosine cost/logit')
     parser.add_argument('--ot-noise', type=float, default=0.0,
@@ -1439,7 +1451,7 @@ if __name__ == '__main__':
     parser.add_argument('--run-id', type=str, default=None,
                         help='unique run identifier (default: auto-generated from config)')
     args = parser.parse_args()
-    MRT.update(decenter=args.decenter, ot_noise=args.ot_noise, hub=args.align_hub,
+    MRT.update(target_power=args.align_target_power, decenter=args.decenter, ot_noise=args.ot_noise, hub=args.align_hub,
                local=args.local_weight, local_warmup=args.local_warmup_epochs, local_raw=args.local_raw)
 
     pl.seed_everything(args.seed)

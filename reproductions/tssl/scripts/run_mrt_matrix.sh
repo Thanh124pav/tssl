@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One VASOT run with the published recipe of a benchmark plus one MRT arm.
 #   run_mrt_matrix.sh <bench> <arm> [seed=0]
-#   bench: fseval | da | yti:<activity> | bf:<activity>
+#   bench: fseval | da | yti:<activity> | bf:<activity> (-r 0.02) | bf4:<activity> (-r 0.04)
 #   arm:   baseline | tmpl | hub   (dc, hub_dc: dropped after YTI results)
 # Appends "bench arm seed mof f1 miou" to artifacts/runs/current/mrt_matrix.tsv;
 # a run already in the table is skipped.
@@ -18,10 +18,11 @@ case "$bench" in
   yti:*)
     case "$act" in changing_tire) k=11 ;; coffee) k=10 ;; cpr) k=7 ;; jump_car) k=12 ;; repot) k=8 ;; esac
     cfg=(-d YTI -ac "$act" -c "$k" -ne 30 --rho 0.15 -lat 0.12 -r 0.04 -lr 1e-4 -wd 1e-5 -ls 3000 32 32 -x -1) ;;
-  bf:*)
+  bf:*|bf4:*)
+    bfr=0.02; [ "${bench%%:*}" = bf4 ] && bfr=0.04   # bf4 = upstream run_bf.sh radius
     case "$act" in coffee|tea) k=7 ;; cereals|milk) k=5 ;; juice|salat) k=8 ;; sandwich|friedegg) k=9 ;;
       scrambledegg) k=12 ;; pancake) k=14 ;; esac
-    cfg=(-d Breakfast -ac "$act" -c "$k" -ne 50 -s --rho 0.2 -lat 0.1 -r 0.02 -ae 0.6 -at 0.5 -lr 1e-3 -wd 1e-4) ;;
+    cfg=(-d Breakfast -ac "$act" -c "$k" -ne 50 -s --rho 0.2 -lat 0.1 -r "$bfr" -ae 0.6 -at 0.5 -lr 1e-3 -wd 1e-4) ;;
   *) echo "unknown bench $bench" >&2; exit 2 ;;
 esac
 case "$arm" in
@@ -34,6 +35,15 @@ case "$arm" in
   tmpl) extra=(--template-slots "$k" --template-warmup-epochs 5) ;;
   hub) extra=(--template-slots "$k" --template-warmup-epochs 5 --align-hub clusters) ;;
   hub_dc) extra=(--template-slots "$k" --template-warmup-epochs 5 --align-hub clusters --decenter 1.0) ;;
+  dc_local) extra=(--decenter 1.0 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  blur3) extra=(--align-target-blur 3) ;;
+  blur6) extra=(--align-target-blur 6) ;;
+  blur12) extra=(--align-target-blur 12) ;;
+  blur6_local) extra=(--align-target-blur 6 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  blur12_local) extra=(--align-target-blur 12 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  pow05) extra=(--align-target-power 0.5) ;;
+  pow2) extra=(--align-target-power 2.0) ;;
+  local_pow2) extra=(--align-target-power 2.0 --local-weight 1.0 --local-warmup-epochs 5) ;;
   *) echo "unknown arm $arm" >&2; exit 2 ;;
 esac
 out=$root/artifacts/runs/current/mrt_${bench//:/_}_${arm}_s${seed}
