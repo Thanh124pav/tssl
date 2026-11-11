@@ -63,24 +63,27 @@ Current picture: `hub_local` is the segmentation configuration, `blur6_local` th
 
 ## 6. Breakfast (partial, 1 seed — not a result yet)
 
-`bf4:<activity>` = upstream radius `-r 0.04` (`bf:` uses 0.02; with 0.02 the coffee baseline is 30.7 MoF, with 0.04 it is 51.0). Seed 0, MoF / F1 / mIoU; Δ vs baseline. 13 of 40 runs finished; milk / juice / salat are running, the other four activities have not started.
+`bf4:<activity>` = upstream radius `-r 0.04` (`bf:` uses 0.02; with 0.02 the coffee baseline is 30.7 MoF, with 0.04 it is 51.0). Seed 0, MoF / F1 / mIoU; Δ vs baseline. 24 of 40 runs finished (6 activities); sandwich, friedegg, scrambledegg and pancake have not been run.
 
 | Activity | baseline | `hub` Δ | `local` Δ | `hub_local` Δ |
 |---|---|---|---|---|
 | coffee | 51.0 / 32.3 / 17.0 | −1.4 / +0.5 / −0.5 | +1.1 / +0.8 / +0.2 | −0.5 / +1.4 / −0.0 |
 | tea | 55.4 / 41.0 / 18.6 | −14.0 / −11.7 / −7.7 | +0.5 / +0.4 / +0.2 | −2.4 / −4.0 / −1.4 |
 | cereals | 62.6 / 44.0 / 24.0 | +0.8 / −0.3 / +0.2 | −0.1 / −0.3 / −0.1 | +0.7 / −0.5 / −0.0 |
-| milk | 52.3 / 48.3 / 25.8 | – | – | – |
+| milk | 52.3 / 48.3 / 25.8 | −4.4 / −10.6 / −7.4 | −0.1 / +0.1 / +0.0 | −4.5 / −10.6 / −7.4 |
+| juice | 70.5 / 46.0 / 21.5 | +0.1 / +1.4 / +0.4 | +0.5 / +0.4 / +0.1 | +0.6 / +1.6 / +0.6 |
+| salat | 44.5 / 27.7 / 11.2 | −2.2 / +10.8 / −2.4 | +0.2 / −0.0 / +0.1 | −1.7 / +11.2 / −2.3 |
+| **mean** | | −3.5 / −1.7 / −2.9 | +0.3 / +0.2 / +0.1 | −1.3 / −0.2 / −1.8 |
 
-On these three activities the hub shows no segmentation advantage, and it fails on tea. One seed; no alignment metrics on Breakfast.
+On these six activities the hub has no segmentation advantage: it loses MoF on 4 of 6 and fails on tea and milk. On salat the hub raises F1 by 10.8 while MoF and mIoU fall; this was not explained. `local` is within ±1.1 everywhere. One seed; no alignment metrics on Breakfast.
 
 ## 7. Not done
 
 - Pouring / Penn Action (data not on the server).
 - Why decentering collapses on YTI.
 - The DA discrepancy between the workstation and the server runs.
-- Breakfast: 27 runs of seed 0 outstanding, seeds 1–2 not started.
-- Post-hoc geometry diagnostic on existing checkpoints (whitening, top-k principal-component removal, per-cluster centering, CSLS / local scaling of the logits), and the training arms it would motivate (CSLS logits, KoLeo or LDReg on prototype residuals).
+- Breakfast: 16 runs of seed 0 outstanding (4 activities), seeds 1–2 not started.
+- Post-hoc geometry diagnostic on existing checkpoints (whitening, top-k principal-component removal, per-cluster centering). The training arms it was meant to motivate (CSLS logits, KoLeo, LDReg, VICReg, uniformity, temporal negatives) were run directly: see `SPREAD_REGULARISERS_2026-11-11.md`.
 
 ## 8. Reproduce
 

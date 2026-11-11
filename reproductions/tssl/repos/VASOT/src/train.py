@@ -23,13 +23,15 @@ import segmentation_ot
 from action_bridge import action_alignment_ce, action_similarity
 from visual_evidence import visual_affinity_loss, consistent_frame_pairs, refine_action_pseudolabels
 from geometry_consensus import geometry_loss, soft_consensus, spectot_temporal_affinity_loss
+from spread_reg import NAMES as SPREAD_NAMES, spread_loss, csls_offset
 from utils import *
 from metrics import ClusteringMetrics, indep_eval_metrics
 
 num_eps = 1e-11
 
 
-MRT = {'decenter': 0.0, 'ot_noise': 0.0, 'hub': 'template', 'local': 0.0, 'local_warmup': 5, 'local_raw': False, 'target_power': 1.0}  # set from CLI before the model is built
+MRT = {'decenter': 0.0, 'ot_noise': 0.0, 'hub': 'template', 'local': 0.0, 'local_warmup': 5, 'local_raw': False, 'target_power': 1.0,
+       'spread': 'none', 'spread_w': 0.0, 'spread_warmup': 0, 'csls': 0}  # set from CLI before the model is built
 
 
 class WindowedMLP(nn.Module):
@@ -557,7 +559,14 @@ class VideoSSL(pl.LightningModule):
         # codes represent a matrix P for each batch element
         # size of a matrix P is (no. of frames in X x no. of frames in Y)
         # P_ij represents the prob. of the frame_i in X being aligned with the frame_j in Y
-        codes = torch.exp(self._view(features_X) @ self._view(features_Y).transpose(1, 2) / self.temp)
+        align_sim = self._view(features_X) @ self._view(features_Y).transpose(1, 2)
+        if MRT['csls'] > 0:
+            # CSLS / local scaling: a Y frame that is close to many X frames
+            # (a hub) has its similarity discounted by its own density.
+            dens = csls_offset(align_sim.detach(), mask_X, k=MRT['csls'])
+            align_sim = align_sim - 0.5 * dens.unsqueeze(1)
+            self.log('csls_density_std', dens.std())
+        codes = torch.exp(align_sim / self.temp)
         codes = codes / codes.sum(dim=-1, keepdim=True)
 
         # Produce pseudo-labels using ASOT, note that we don't backpropagate through this part
@@ -730,6 +739,20 @@ class VideoSSL(pl.LightningModule):
             total_loss_ce = total_loss_ce + MRT['local'] * loss_local
             self.log('train_loss_local', loss_local)
             self.log('local_rows_used', valid.float().mean())
+
+        if MRT['spread'] != 'none' and self.current_epoch >= MRT['spread_warmup']:
+            # label-free spread regulariser on the valid frames of both videos
+            zs, assigns = [], []
+            for feats, mask, plan in ((features_X, mask_X, opt_codes_segmentation_X),
+                                      (features_Y, mask_Y, opt_codes_segmentation_Y)):
+                for b in range(feats.shape[0]):
+                    keep = mask[b].bool()
+                    zs.append(feats[b, keep])
+                    assigns.append(plan[b, keep].argmax(-1))
+            loss_spread = spread_loss(MRT['spread'], zs, assigns=assigns,
+                                      protos=self.clusters.detach(), temp=self.temp)
+            total_loss_ce = total_loss_ce + MRT['spread_w'] * loss_spread
+            self.log('train_loss_spread', loss_spread)
 
         self.log('train_loss', total_loss_ce)
 
@@ -1400,6 +1423,12 @@ if __name__ == '__main__':
     parser.add_argument('--align-target-power', type=float, default=1.0,
                         help='raise the alignment pseudo-label to this power and renormalise '
                              'rows (<1 softens, >1 sharpens, 1 = off)')
+    parser.add_argument('--spread-reg', default='none', choices=('none',) + SPREAD_NAMES,
+                        help='label-free spread regulariser on the frame embeddings (spread_reg.py)')
+    parser.add_argument('--spread-weight', type=float, default=0.0)
+    parser.add_argument('--spread-warmup-epochs', type=int, default=0)
+    parser.add_argument('--align-csls', type=int, default=0,
+                        help='k of the CSLS density correction on the alignment logits (0 = off)')
     parser.add_argument('--decenter', type=float, default=0.0,
                         help='MRT: fraction of the EMA embedding mean removed before every cosine cost/logit')
     parser.add_argument('--ot-noise', type=float, default=0.0,
@@ -1451,7 +1480,8 @@ if __name__ == '__main__':
     parser.add_argument('--run-id', type=str, default=None,
                         help='unique run identifier (default: auto-generated from config)')
     args = parser.parse_args()
-    MRT.update(target_power=args.align_target_power, decenter=args.decenter, ot_noise=args.ot_noise, hub=args.align_hub,
+    MRT.update(spread=args.spread_reg, spread_w=args.spread_weight, spread_warmup=args.spread_warmup_epochs,
+               csls=args.align_csls, target_power=args.align_target_power, decenter=args.decenter, ot_noise=args.ot_noise, hub=args.align_hub,
                local=args.local_weight, local_warmup=args.local_warmup_epochs, local_raw=args.local_raw)
 
     pl.seed_everything(args.seed)

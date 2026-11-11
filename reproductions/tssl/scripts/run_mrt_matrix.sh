@@ -44,6 +44,22 @@ case "$arm" in
   pow05) extra=(--align-target-power 0.5) ;;
   pow2) extra=(--align-target-power 2.0) ;;
   local_pow2) extra=(--align-target-power 2.0 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  # spread regularisers from prior work (spread_reg.py); weights put each at
+  # 0.3-0.6x the gradient norm of the alignment loss (calib_spread.py)
+  vcreg) extra=(--spread-reg vc --spread-weight 3.0) ;;
+  unif) extra=(--spread-reg unif --spread-weight 1.0) ;;
+  koleo) extra=(--spread-reg koleo --spread-weight 0.2) ;;
+  ldreg) extra=(--spread-reg ldreg --spread-weight 0.1) ;;
+  koleo_res) extra=(--spread-reg koleo_res --spread-weight 0.2 --spread-warmup-epochs 5) ;;
+  tneg) extra=(--spread-reg tneg --spread-weight 0.5) ;;
+  csls) extra=(--align-csls 10) ;;
+  # combinations: which spread arm keeps its gain next to local / target blur
+  vcreg1) extra=(--spread-reg vc --spread-weight 1.0) ;;
+  vcreg_blur6) extra=(--spread-reg vc --spread-weight 3.0 --align-target-blur 6) ;;
+  csls_local) extra=(--align-csls 10 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  csls_blur6_local) extra=(--align-csls 10 --align-target-blur 6 --local-weight 1.0 --local-warmup-epochs 5) ;;
+  tneg_blur6) extra=(--spread-reg tneg --spread-weight 0.5 --align-target-blur 6) ;;
+  ldreg_local) extra=(--spread-reg ldreg --spread-weight 0.1 --local-weight 1.0 --local-warmup-epochs 5) ;;
   *) echo "unknown arm $arm" >&2; exit 2 ;;
 esac
 out=$root/artifacts/runs/current/mrt_${bench//:/_}_${arm}_s${seed}
