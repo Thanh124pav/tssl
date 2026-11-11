@@ -21,10 +21,15 @@ from video_dataset import VideoDataset
 import alignment_ot
 import segmentation_ot
 from action_bridge import action_alignment_ce, action_similarity
+from visual_evidence import visual_affinity_loss, consistent_frame_pairs, refine_action_pseudolabels
+from geometry_consensus import geometry_loss, soft_consensus, spectot_temporal_affinity_loss
 from utils import *
 from metrics import ClusteringMetrics, indep_eval_metrics
 
 num_eps = 1e-11
+
+
+MRT = {'decenter': 0.0, 'ot_noise': 0.0, 'hub': 'template', 'local': 0.0, 'local_warmup': 5, 'local_raw': False}  # set from CLI before the model is built
 
 
 class WindowedMLP(nn.Module):
@@ -84,6 +89,14 @@ class VideoSSL(pl.LightningModule):
                  ray_centre_margin=0.35, ray_update_centres=True,
                  action_bridge_cost_weight=0.0, action_bridge_loss_weight=0.0,
                  action_bridge_temp=0.1, action_bridge_warmup_epochs=5,
+                 visual_affinity_weight=0.0, visual_affinity_stride=4,
+                 visual_affinity_teacher_temp=0.07,
+                 match_pseudo_weight=0.0, match_raw_topk=8,
+                 match_cycle_tolerance=4, match_warmup_epochs=5,
+                 geometry_weight=0.0, geometry_repulsion_weight=0.0,
+                 spectot_tar_weight=0.0,
+                 soft_consensus_weight=0.0, soft_consensus_blend=0.0,
+                 proposal_videos=4,
                  arc_reparam=False, arc_warmup_epochs=5,
                  bspline=False, bspline_tol=0.05, bspline_kmax=0, bspline_warmup_epochs=5,
                  bspline_space='X', bspline_blend_max=1.0, bspline_blend_rampup=0,
@@ -116,6 +129,12 @@ class VideoSSL(pl.LightningModule):
         self.lambda_actions_eval = lambda_actions_eval
 
         self.temp = temp
+        # Margin-restoring transport (MRT): see _view/_teacher below.
+        self.decenter = float(MRT['decenter'])
+        self.ot_noise = float(MRT['ot_noise'])
+        self.register_buffer('embed_mean', torch.zeros(layer_sizes[-1]))
+        self.register_buffer('embed_mean_ready', torch.zeros((), dtype=torch.bool))
+        self.register_buffer('mrt_cfg', torch.tensor([self.decenter, self.ot_noise]))
         self.n_frames = n_frames
         self.rho = rho
         self.rho_seg = rho if rho_seg is None else rho_seg
@@ -145,6 +164,19 @@ class VideoSSL(pl.LightningModule):
         self.action_bridge_loss_weight = action_bridge_loss_weight
         self.action_bridge_temp = action_bridge_temp
         self.action_bridge_warmup_epochs = action_bridge_warmup_epochs
+        self.visual_affinity_weight = float(visual_affinity_weight)
+        self.visual_affinity_stride = int(visual_affinity_stride)
+        self.visual_affinity_teacher_temp = float(visual_affinity_teacher_temp)
+        self.match_pseudo_weight = float(match_pseudo_weight)
+        self.match_raw_topk = int(match_raw_topk)
+        self.match_cycle_tolerance = int(match_cycle_tolerance)
+        self.match_warmup_epochs = int(match_warmup_epochs)
+        self.geometry_weight = float(geometry_weight)
+        self.geometry_repulsion_weight = float(geometry_repulsion_weight)
+        self.spectot_tar_weight = float(spectot_tar_weight)
+        self.soft_consensus_weight = float(soft_consensus_weight)
+        self.soft_consensus_blend = float(soft_consensus_blend)
+        self.proposal_videos = int(proposal_videos)
         self.beta = beta
         self.arc_reparam = arc_reparam
         self.arc_warmup_epochs = arc_warmup_epochs
@@ -294,6 +326,28 @@ class VideoSSL(pl.LightningModule):
             features = F.normalize((1 - blend) * features + blend * smoothed, dim=-1)
         return features, u
 
+    def _view(self, z):
+        """Decentred view used for every similarity/cost: remove the shared
+        (concentrated) direction of the embedding cloud, then renormalise."""
+        if self.decenter <= 0 or not bool(self.embed_mean_ready):
+            return z
+        return F.normalize(z - self.decenter * self.embed_mean, dim=-1)
+
+    def _teacher(self, z):
+        """View used for OT pseudo-label costs: decentred, plus an isotropic
+        Gaussian sample so one pseudo-label set is not locked in early."""
+        if self.training and self.ot_noise > 0:
+            z = F.normalize(z + self.ot_noise * torch.randn_like(z) / z.shape[-1] ** 0.5, dim=-1)
+        return self._view(z)
+
+    @torch.no_grad()
+    def _update_embed_mean(self, feats, masks):
+        m = torch.cat([f[k] for f, k in zip(feats, masks)]).mean(0)
+        if bool(self.embed_mean_ready):
+            self.embed_mean.lerp_(m, 0.05)
+        else:
+            self.embed_mean.copy_(m); self.embed_mean_ready.fill_(True)
+
     def _ramp(self, target: float, warmup_epochs: int, rampup_epochs: int) -> float:
         """Linear ramp of the blend coefficient after warmup. Eval → full target."""
         if not self.training:
@@ -315,13 +369,15 @@ class VideoSSL(pl.LightningModule):
         sd = checkpoint.get('state_dict')
         if sd is None:
             return
+        if 'mrt_cfg' in sd:  # MRT settings travel with the weights, not the CLI
+            self.decenter, self.ot_noise = (float(v) for v in sd['mrt_cfg'])
         # WindowedMLP wraps the old nn.Sequential, which renamed every encoder
         # parameter from `mlp.X` to `mlp.mlp.X`. Remap so earlier checkpoints
         # still load; the window itself carries no parameters.
         stale = [k for k in list(sd) if k.startswith('mlp.') and not k.startswith('mlp.mlp.')]
         for k in stale:
             sd['mlp.mlp.' + k[len('mlp.'):]] = sd.pop(k)
-        for name in ('geo_centres', 'geo_radii', 'geo_ready'):
+        for name in ('geo_centres', 'geo_radii', 'geo_ready', 'embed_mean', 'embed_mean_ready', 'mrt_cfg'):
             if name not in sd and hasattr(self, name):
                 sd[name] = getattr(self, name).clone()
 
@@ -360,6 +416,17 @@ class VideoSSL(pl.LightningModule):
         )
         features_Y, _ = self._maybe_warp(features_Y, mask_Y)
 
+        self._update_embed_mean([features_X, features_Y], [mask_X, mask_Y])
+        self.log('embed_mean_norm', self.embed_mean.norm())
+        loss_visual = features_X.new_zeros(())
+        if self.visual_affinity_weight > 0:
+            loss_visual = visual_affinity_loss(
+                features_raw_X, features_raw_Y, features_X, features_Y,
+                mask_X, mask_Y, stride=self.visual_affinity_stride,
+                teacher_temp=self.visual_affinity_teacher_temp,
+            )
+        self.log('train_loss_visual_affinity', loss_visual)
+
         with torch.no_grad():
             self.clusters.data = F.normalize(self.clusters.data, dim=-1)
             # Keep latent_basis rows unit-norm (parallels the clusters normalization).
@@ -367,13 +434,13 @@ class VideoSSL(pl.LightningModule):
                 self.latent_basis.data = F.normalize(self.latent_basis.data, dim=-1)
 
         ##FIND SEGMENTATION LOSS FOR X
-        codes_segmentation_X = torch.exp(features_X @ self.clusters.T[None, ...] / self.temp)
+        codes_segmentation_X = torch.exp(self._view(features_X) @ self._view(self.clusters).T[None, ...] / self.temp)
         codes_segmentation_X = codes_segmentation_X / codes_segmentation_X.sum(dim=-1, keepdim=True)
 
         with torch.no_grad():  # pseudo-labels from OT
             temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho_seg,
                                                                          features_X.device)
-            cost_matrix_segmentation_X = 1. - features_X @ self.clusters.T.unsqueeze(0)
+            cost_matrix_segmentation_X = 1. - self._teacher(features_X) @ self._view(self.clusters).T.unsqueeze(0)
             cost_matrix_segmentation_X += temp_prior_segmentation_X
             # print(cost_matrix_segmentation_X.shape)
             #change ub_action to False (reminder)
@@ -386,19 +453,14 @@ class VideoSSL(pl.LightningModule):
                                                                          n_iters=self.n_ot_train,
                                                                          step_size=self.step_size)
 
-        loss_ce_segmentation_X = -(
-                    (opt_codes_segmentation_X * torch.log(codes_segmentation_X + num_eps)) * mask_X[..., None]).sum(
-            dim=2).mean()
-        self.log('train_loss_segmentation_X', loss_ce_segmentation_X)
-
         ##FIND SEGMENTATION LOSS FOR Y
-        codes_segmentation_Y = torch.exp(features_Y @ self.clusters.T[None, ...] / self.temp)
+        codes_segmentation_Y = torch.exp(self._view(features_Y) @ self._view(self.clusters).T[None, ...] / self.temp)
         codes_segmentation_Y = codes_segmentation_Y / codes_segmentation_Y.sum(dim=-1, keepdim=True)
 
         with torch.no_grad():  # pseudo-labels from OT
             temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho_seg,
                                                                          features_Y.device)
-            cost_matrix_segmentation_Y = 1. - features_Y @ self.clusters.T.unsqueeze(0)
+            cost_matrix_segmentation_Y = 1. - self._teacher(features_Y) @ self._view(self.clusters).T.unsqueeze(0)
             cost_matrix_segmentation_Y += temp_prior_segmentation_Y
             opt_codes_segmentation_Y, _ = segmentation_ot.segment_ot(cost_matrix_segmentation_Y, mask_Y,
                                                                          eps=self.train_eps, alpha=self.alpha_train,
@@ -409,9 +471,81 @@ class VideoSSL(pl.LightningModule):
                                                                          n_iters=self.n_ot_train,
                                                                          step_size=self.step_size)
 
+        loss_geometry_new = features_X.new_zeros(())
+        loss_soft_consensus = features_X.new_zeros(())
+        if self.geometry_weight > 0 or self.geometry_repulsion_weight > 0 or self.spectot_tar_weight > 0 or self.soft_consensus_weight > 0 or self.soft_consensus_blend > 0:
+            proposal_views = [features_X, features_Y]
+            proposal_masks = [mask_X, mask_Y]
+            proposal_targets = [opt_codes_segmentation_X, opt_codes_segmentation_Y]
+            for item in batch[2:self.proposal_videos]:
+                raw_extra, mask_extra = item[:2]
+                B_extra, T_extra, _ = raw_extra.shape
+                z_extra = F.normalize(
+                    self.mlp(raw_extra.reshape(-1, raw_extra.shape[-1])).reshape(B_extra, T_extra, D), dim=-1)
+                z_extra, _ = self._maybe_warp(z_extra, mask_extra)
+                proposal_views.append(z_extra)
+                proposal_masks.append(mask_extra)
+                with torch.no_grad():
+                    cost_extra = 1. - self._teacher(z_extra) @ self._view(self.clusters).T.unsqueeze(0)
+                    cost_extra += segmentation_ot.temporal_prior(
+                        T_extra, self.n_clusters, self.rho_seg, z_extra.device)
+                    q_extra, _ = segmentation_ot.segment_ot(
+                        cost_extra, mask_extra, eps=self.train_eps, alpha=self.alpha_train,
+                        radius=self.radius_gw, ub_frames=False, ub_actions=True,
+                        lambda_frames=self.lambda_frames_train,
+                        lambda_actions=self.lambda_actions_train,
+                        n_iters=self.n_ot_train, step_size=self.step_size)
+                    proposal_targets.append(q_extra)
+            if self.geometry_weight > 0 or self.geometry_repulsion_weight > 0:
+                var, cov, repel = geometry_loss(proposal_views, proposal_masks, proposal_targets)
+                loss_geometry_new = self.geometry_weight * (var + cov) + self.geometry_repulsion_weight * repel
+                self.log('geometry_variance', var)
+                self.log('geometry_covariance', cov)
+                self.log('geometry_far_repulsion', repel)
+            if self.spectot_tar_weight > 0:
+                tar = spectot_temporal_affinity_loss(proposal_views, proposal_masks)
+                loss_geometry_new = loss_geometry_new + self.spectot_tar_weight * tar
+                self.log('spectot_tar_loss', tar)
+            if self.soft_consensus_weight > 0 or self.soft_consensus_blend > 0:
+                loss_soft_consensus, refined_targets = soft_consensus(
+                    proposal_views, proposal_masks, proposal_targets,
+                    blend=self.soft_consensus_blend)
+                opt_codes_segmentation_X, opt_codes_segmentation_Y = refined_targets[:2]
+                self.log('soft_consensus_loss', loss_soft_consensus)
+
+        if self.match_pseudo_weight > 0 and self.current_epoch >= self.match_warmup_epochs:
+            if len(batch) < 3:
+                raise RuntimeError('matched pseudo-labels require a third training video')
+            features_raw_Z, mask_Z = batch[2][:2]
+            with torch.no_grad():
+                B_Z, T_Z, _ = features_raw_Z.shape
+                features_Z = F.normalize(
+                    self.mlp(features_raw_Z.reshape(-1, features_raw_Z.shape[-1])).reshape(B_Z, T_Z, D),
+                    dim=-1,
+                )
+                features_Z, _ = self._maybe_warp(features_Z, mask_Z)
+                matched_x, matched_y, match_stats = consistent_frame_pairs(
+                    features_raw_X, features_raw_Y, features_raw_Z,
+                    features_X, features_Y, features_Z, mask_X, mask_Y, mask_Z,
+                    raw_topk=self.match_raw_topk,
+                    cycle_tolerance=self.match_cycle_tolerance,
+                )
+                opt_codes_segmentation_X, opt_codes_segmentation_Y = refine_action_pseudolabels(
+                    opt_codes_segmentation_X, opt_codes_segmentation_Y,
+                    matched_x, matched_y, strength=self.match_pseudo_weight,
+                )
+            self.log('match_pseudo_coverage', match_stats['coverage_x'])
+            self.log('match_pseudo_pairs', float(match_stats['cycle_supported']))
+
+        loss_ce_segmentation_X = -(
+            (opt_codes_segmentation_X * torch.log(codes_segmentation_X + num_eps))
+            * mask_X[..., None]
+        ).sum(dim=2).mean()
         loss_ce_segmentation_Y = -(
-                    (opt_codes_segmentation_Y * torch.log(codes_segmentation_Y + num_eps)) * mask_Y[..., None]).sum(
-            dim=2).mean()
+            (opt_codes_segmentation_Y * torch.log(codes_segmentation_Y + num_eps))
+            * mask_Y[..., None]
+        ).sum(dim=2).mean()
+        self.log('train_loss_segmentation_X', loss_ce_segmentation_X)
         self.log('train_loss_segmentation_Y', loss_ce_segmentation_Y)
 
         ##TOTAL SEGMENTATION LOSS
@@ -423,7 +557,7 @@ class VideoSSL(pl.LightningModule):
         # codes represent a matrix P for each batch element
         # size of a matrix P is (no. of frames in X x no. of frames in Y)
         # P_ij represents the prob. of the frame_i in X being aligned with the frame_j in Y
-        codes = torch.exp(features_X @ features_Y.transpose(1, 2) / self.temp)
+        codes = torch.exp(self._view(features_X) @ self._view(features_Y).transpose(1, 2) / self.temp)
         codes = codes / codes.sum(dim=-1, keepdim=True)
 
         # Produce pseudo-labels using ASOT, note that we don't backpropagate through this part
@@ -432,7 +566,7 @@ class VideoSSL(pl.LightningModule):
             # ρR = rho * Temporal prior
             temp_prior = alignment_ot.temporal_prior(T_X, T_Y, self.rho_align, features_X.device)
             # Cost Matrix Ck from section 4.2, no need to divide by norms since both vectors were previously normalized with F.normalize()
-            cost_matrix = 1. - features_X @ features_Y.transpose(1, 2)
+            cost_matrix = 1. - self._teacher(features_X) @ self._teacher(features_Y).transpose(1, 2)
             bridge_active = self.current_epoch >= self.action_bridge_warmup_epochs
             if bridge_active and self.action_bridge_cost_weight > 0:
                 # Segmentation -> alignment: frames with similar action
@@ -479,11 +613,18 @@ class VideoSSL(pl.LightningModule):
             # A14: replace the pairwise pseudo-label with one factored through the
             # ordered template, which makes the plan cycle-consistent by
             # construction. Blended so the arm is one factor at a time.
+            opt_codes_pair = opt_codes  # frame-level plan, before any hub factoring
             template_active = (self.template_slots > 0
                                and self.current_epoch >= self.template_warmup_epochs)
             if template_active:
-                plan_x = self._template_plan(features_X, mask_X)
-                plan_y = self._template_plan(features_Y, mask_Y)
+                if MRT['hub'] == 'clusters':
+                    # Prototype hub: the two segmentation plans already map both
+                    # videos onto the shared action prototypes, so alignment is
+                    # their composition and needs no pairwise solve or template.
+                    plan_x, plan_y = opt_codes_segmentation_X, opt_codes_segmentation_Y
+                else:
+                    plan_x = self._template_plan(features_X, mask_X)
+                    plan_y = self._template_plan(features_Y, mask_Y)
                 induced, induced_valid = self.induced_alignment(
                     plan_x, plan_y, mask_y=mask_Y, hard=not self.template_soft)
                 w = max(0.0, min(1.0, self.template_blend))
@@ -543,10 +684,43 @@ class VideoSSL(pl.LightningModule):
             loss_ce_segmentation
             + (self.beta * loss_ce_alignment)
             + (self.action_bridge_loss_weight * loss_action_bridge)
+            + (self.visual_affinity_weight * loss_visual)
+            + loss_geometry_new
+            + (self.soft_consensus_weight * loss_soft_consensus)
         )
 
         loss_geometry = self._ray_geometry_step(batch, D, codes_segmentation_X)
         total_loss_ce = total_loss_ce + loss_geometry
+
+        # Local (intra-action) contrast. The global losses above place a frame
+        # relative to the action prototypes; here the assigned prototype is
+        # subtracted and the residual -- where the frame sits inside its action
+        # -- is matched across the two videos, among frames of the same
+        # pseudo-action only, against the frame-level OT plan.
+        if MRT['local'] > 0 and self.current_epoch >= MRT['local_warmup']:
+            with torch.no_grad():
+                ax = opt_codes_segmentation_X.argmax(-1)
+                ay = opt_codes_segmentation_Y.argmax(-1)
+                same = ((ax.unsqueeze(2) == ay.unsqueeze(1))
+                        & mask_X.unsqueeze(2).bool() & mask_Y.unsqueeze(1).bool())
+                t_loc = opt_codes_pair * same
+                row = t_loc.sum(-1, keepdim=True)
+                valid = (row.squeeze(-1) > 0.1 * opt_codes_pair.sum(-1)) & mask_X.bool()
+                t_loc = t_loc / row.clamp_min(1e-12)
+                protos = self.clusters.detach()
+            res_x = features_X - protos[ax]
+            res_y = features_Y - protos[ay]
+            if not MRT['local_raw']:
+                # cosine of residuals; the raw variant keeps their length, so
+                # frames sitting on their prototype contribute ~0 instead of
+                # having a tiny residual blown up to unit norm
+                res_x, res_y = F.normalize(res_x, dim=-1), F.normalize(res_y, dim=-1)
+            self.log('local_residual_norm', (features_X - protos[ax]).norm(dim=-1).mean())
+            logp = (res_x @ res_y.transpose(1, 2) / self.temp).masked_fill(~same, -1e4).log_softmax(-1)
+            loss_local = -((t_loc * logp).sum(-1) * valid).sum() / valid.sum().clamp_min(1)
+            total_loss_ce = total_loss_ce + MRT['local'] * loss_local
+            self.log('train_loss_local', loss_local)
+            self.log('local_rows_used', valid.float().mean())
 
         self.log('train_loss', total_loss_ce)
 
@@ -639,7 +813,7 @@ class VideoSSL(pl.LightningModule):
             posts = []
             for f, m in zip(feats, masks):
                 T_f = f.shape[1]
-                cost = 1. - f @ self.clusters.T.unsqueeze(0)
+                cost = 1. - self._view(f) @ self._view(self.clusters).T.unsqueeze(0)
                 cost = cost + segmentation_ot.temporal_prior(T_f, self.n_clusters,
                                                              self.rho_seg, f.device)
                 plan, _ = segmentation_ot.segment_ot(
@@ -756,7 +930,7 @@ class VideoSSL(pl.LightningModule):
     def _align_argmax(self, f_a, f_b, m_a, m_b):
         """Detached argmax correspondence a -> b from the public alignment solver."""
         n_a, n_b = f_a.shape[1], f_b.shape[1]
-        cost = 1. - f_a @ f_b.transpose(1, 2)
+        cost = 1. - self._view(f_a) @ self._view(f_b).transpose(1, 2)
         cost = cost + alignment_ot.temporal_prior(n_a, n_b, self.rho_align, f_a.device)
         cost = torch.cat((torch.ones(1, 1, n_b, device=f_a.device) * 0.5, cost), dim=1)
         if self.fix_virtual_column:
@@ -792,7 +966,7 @@ class VideoSSL(pl.LightningModule):
 
         temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho_seg,
                                                                      features_X.device)
-        cost_matrix_segmentation_X = 1. - features_X @ self.clusters.T.unsqueeze(0)
+        cost_matrix_segmentation_X = 1. - self._view(features_X) @ self._view(self.clusters).T.unsqueeze(0)
         cost_matrix_segmentation_X += temp_prior_segmentation_X
         # print(cost_matrix_segmentation_X.shape)
         segmentation_X, _ = segmentation_ot.segment_ot(cost_matrix_segmentation_X, mask_X,
@@ -806,7 +980,7 @@ class VideoSSL(pl.LightningModule):
 
         temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho_seg,
                                                                      features_Y.device)
-        cost_matrix_segmentation_Y = 1. - features_Y @ self.clusters.T.unsqueeze(0)
+        cost_matrix_segmentation_Y = 1. - self._view(features_Y) @ self._view(self.clusters).T.unsqueeze(0)
         cost_matrix_segmentation_Y += temp_prior_segmentation_Y
         segmentation_Y, _ = segmentation_ot.segment_ot(cost_matrix_segmentation_Y, mask_Y,
                                                                      eps=self.train_eps, alpha=self.alpha_train,
@@ -880,7 +1054,7 @@ class VideoSSL(pl.LightningModule):
 
         temp_prior_segmentation_X = segmentation_ot.temporal_prior(T_X, self.n_clusters, self.rho_seg,
                                                                      features_X.device)
-        cost_matrix_segmentation_X = 1. - features_X @ self.clusters.T.unsqueeze(0)
+        cost_matrix_segmentation_X = 1. - self._view(features_X) @ self._view(self.clusters).T.unsqueeze(0)
         cost_matrix_segmentation_X += temp_prior_segmentation_X
         # print(cost_matrix_segmentation_X.shape)
         segmentation_X, _ = segmentation_ot.segment_ot(cost_matrix_segmentation_X, mask_X,
@@ -894,7 +1068,7 @@ class VideoSSL(pl.LightningModule):
 
         temp_prior_segmentation_Y = segmentation_ot.temporal_prior(T_Y, self.n_clusters, self.rho_seg,
                                                                      features_Y.device)
-        cost_matrix_segmentation_Y = 1. - features_Y @ self.clusters.T.unsqueeze(0)
+        cost_matrix_segmentation_Y = 1. - self._view(features_Y) @ self._view(self.clusters).T.unsqueeze(0)
         cost_matrix_segmentation_Y += temp_prior_segmentation_Y
         segmentation_Y, _ = segmentation_ot.segment_ot(cost_matrix_segmentation_Y, mask_Y,
                                                            eps=self.train_eps, alpha=self.alpha_train,
@@ -1180,6 +1354,46 @@ if __name__ == '__main__':
                         help='Temperature for action-induced frame alignment probabilities')
     parser.add_argument('--action-bridge-warmup-epochs', type=int, default=5,
                         help='Epochs before enabling action bridge cost/loss')
+    parser.add_argument('--visual-affinity-weight', type=float, default=0.0,
+                        help='Cross-video raw-visual affinity KL weight (0 = published model)')
+    parser.add_argument('--visual-affinity-stride', type=int, default=4,
+                        help='Subsample stride for visual affinity preservation')
+    parser.add_argument('--visual-affinity-teacher-temp', type=float, default=0.07,
+                        help='Temperature of the fixed raw-feature visual teacher')
+    parser.add_argument('--match-pseudo-weight', type=float, default=0.0,
+                        help='Blend strength for action pseudo-labels at 3-video-consistent frame matches')
+    parser.add_argument('--match-raw-topk', type=int, default=8,
+                        help='Raw-visual top-k support required for each frame match')
+    parser.add_argument('--match-cycle-tolerance', type=int, default=4,
+                        help='Allowed X→Z versus X→Y→Z disagreement in sampled frames')
+    parser.add_argument('--match-warmup-epochs', type=int, default=5,
+                        help='Epochs before enabling consistent-match pseudo-label transfer')
+    parser.add_argument('--proposal-triplets', '--proposal-multiview',
+                        dest='proposal_triplets', action='store_true',
+                        help='Use the same n-video sampler for ablation controls')
+    parser.add_argument('--geometry-weight', type=float, default=0.0,
+                        help='VICReg-like variance and covariance regularization weight')
+    parser.add_argument('--geometry-repulsion-weight', type=float, default=0.0,
+                        help='Gated distant-frame cosine repulsion weight')
+    parser.add_argument('--spectot-tar-weight', type=float, default=0.0,
+                        help='SpecT-OT temporal affinity regularization ablation weight')
+    parser.add_argument('--soft-consensus-weight', type=float, default=0.0,
+                        help='Soft reciprocal and multi-path consistency weight')
+    parser.add_argument('--soft-consensus-blend', type=float, default=0.0,
+                        help='Soft confidence-weighted pseudo-label transfer strength')
+    parser.add_argument('--align-hub', default='template', choices=['template', 'clusters'],
+                        help='with --template-slots>0: factor alignment through the random template or through the action prototypes')
+    parser.add_argument('--local-weight', type=float, default=0.0,
+                        help='weight of the intra-action residual contrastive loss')
+    parser.add_argument('--local-warmup-epochs', type=int, default=5)
+    parser.add_argument('--local-raw', action='store_true',
+                        help='local loss on un-normalised residuals (z - prototype)')
+    parser.add_argument('--decenter', type=float, default=0.0,
+                        help='MRT: fraction of the EMA embedding mean removed before every cosine cost/logit')
+    parser.add_argument('--ot-noise', type=float, default=0.0,
+                        help='MRT: std of the Gaussian sample added to embeddings before OT pseudo-labelling')
+    parser.add_argument('--proposal-videos', type=int, default=4,
+                        help='Videos per training item for geometry and soft consensus')
     parser.add_argument('--n-clusters', '-c', type=int, default=8, help='number of actions/clusters')
     parser.add_argument('--beta', '-b', type=float, default=1,
                         help='the weight used when combining alignment and segmentation losses')
@@ -1225,6 +1439,8 @@ if __name__ == '__main__':
     parser.add_argument('--run-id', type=str, default=None,
                         help='unique run identifier (default: auto-generated from config)')
     args = parser.parse_args()
+    MRT.update(decenter=args.decenter, ot_noise=args.ot_noise, hub=args.align_hub,
+               local=args.local_weight, local_warmup=args.local_warmup_epochs, local_raw=args.local_raw)
 
     pl.seed_everything(args.seed)
 
@@ -1241,19 +1457,32 @@ if __name__ == '__main__':
     ckpt_subdir = os.path.join(run_dir, 'checkpoints')
     os.makedirs(ckpt_subdir, exist_ok=True)
 
-    data_val = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
-    if args.ray_geometry:
+    data_val = VideoDataset(args.base_path, args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
+    new_proposal = (args.geometry_weight > 0 or args.geometry_repulsion_weight > 0
+                    or args.spectot_tar_weight > 0
+                    or args.soft_consensus_weight > 0 or args.soft_consensus_blend > 0)
+    if args.ray_geometry or args.match_pseudo_weight > 0 or args.proposal_triplets or new_proposal:
         from video_dataset import MultiVideoDataset
-        data_train = MultiVideoDataset('../data', args.dataset, args.n_frames,
+        data_train = MultiVideoDataset(args.base_path, args.dataset, args.n_frames,
                                        standardise=args.std_feats, random=True,
                                        action_class=args.activity,
-                                       n_videos_per_item=args.ray_videos)
+                                       n_videos_per_item=max(args.proposal_videos if (new_proposal or args.proposal_triplets) else 2,
+                                                             args.ray_videos if args.ray_geometry else 2,
+                                                             3 if args.match_pseudo_weight > 0
+                                                             or args.proposal_triplets else 2))
     else:
-        data_train = VideoDataset('../data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
-    data_test = VideoDataset('../data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
-    if args.input_window > 0 and args.batch_size != 1:
+        data_train = VideoDataset(args.base_path, args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
+    data_test = VideoDataset(args.base_path, args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
+    if (args.input_window > 0 or args.visual_affinity_weight > 0
+            or args.match_pseudo_weight > 0 or new_proposal) and args.batch_size != 1:
         raise SystemExit('--input-window requires --batch-size 1: the call sites flatten '
                          '(B, T, D) to (B*T, D), so a larger batch would window across videos')
+    if args.visual_affinity_weight < 0 or not 0 <= args.match_pseudo_weight <= 1:
+        raise SystemExit('visual-affinity-weight must be nonnegative and match-pseudo-weight in [0, 1]')
+    if (args.proposal_videos < 3 or args.geometry_weight < 0 or args.geometry_repulsion_weight < 0
+            or args.spectot_tar_weight < 0
+            or args.soft_consensus_weight < 0 or not 0 <= args.soft_consensus_blend <= 1):
+        raise SystemExit('invalid geometry/soft-consensus proposal hyperparameters')
     val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(data_test, batch_size=1, shuffle=False)
@@ -1286,6 +1515,19 @@ if __name__ == '__main__':
                        action_bridge_loss_weight=args.action_bridge_loss_weight,
                        action_bridge_temp=args.action_bridge_temp,
                        action_bridge_warmup_epochs=args.action_bridge_warmup_epochs,
+                       visual_affinity_weight=args.visual_affinity_weight,
+                       visual_affinity_stride=args.visual_affinity_stride,
+                       visual_affinity_teacher_temp=args.visual_affinity_teacher_temp,
+                       match_pseudo_weight=args.match_pseudo_weight,
+                       match_raw_topk=args.match_raw_topk,
+                       match_cycle_tolerance=args.match_cycle_tolerance,
+                       match_warmup_epochs=args.match_warmup_epochs,
+                       geometry_weight=args.geometry_weight,
+                       geometry_repulsion_weight=args.geometry_repulsion_weight,
+                       spectot_tar_weight=args.spectot_tar_weight,
+                       soft_consensus_weight=args.soft_consensus_weight,
+                       soft_consensus_blend=args.soft_consensus_blend,
+                       proposal_videos=args.proposal_videos,
                        arc_reparam=args.arc_reparam, arc_warmup_epochs=args.arc_warmup_epochs,
                        bspline=args.bspline, bspline_tol=args.bspline_tol, bspline_kmax=args.bspline_kmax, bspline_warmup_epochs=args.bspline_warmup_epochs,
                        bspline_space=args.bspline_space, bspline_blend_max=args.bspline_blend_max, bspline_blend_rampup=args.bspline_blend_rampup,

@@ -40,8 +40,11 @@ def load_model(ckpt, device="cpu", init_seed=None):
     return model
 
 
-def load_dataset(dataset="FSeval", frames=256, activity="all", data_root=DATA_ROOT):
-    return VideoDataset(data_root, dataset, frames, standardise=False,
+def load_dataset(dataset="FSeval", frames=256, activity="all", data_root=DATA_ROOT,
+                 standardise=None):
+    if standardise is None:
+        standardise = dataset == "Breakfast"
+    return VideoDataset(data_root, dataset, frames, standardise=standardise,
                         random=False, action_class=[activity])
 
 
